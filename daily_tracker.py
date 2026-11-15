@@ -20,31 +20,42 @@ CSV = os.path.join(STK, 'kline_all.csv')
 CONFIRMED = ['顶格(89%档)', '强确认(86%档)', '确认(74%档)', '排雷回避(43%)']
 
 def fetch_update():
-    """增量抓取最近10个交易日日线, 合并进 kline_all.csv"""
+    """增量抓取最近10个交易日日线, 合并进 kline_all.csv (16线程并发)"""
     import urllib.request
+    from concurrent.futures import ThreadPoolExecutor
     uni = pd.read_csv(os.path.join(STK, 'universe.csv'))
     codes = uni['code'].tolist()
     old = pd.read_csv(CSV)
     have = set(map(tuple, old[['code','date']].values))
     rows = []
-    for i, code in enumerate(codes):
+
+    def fetch_one(code):
         for host in ('https://web.ifzq.gtimg.cn', 'https://proxy.finance.qq.com'):
             try:
                 url = f'{host}/appstock/app/fqkline/get?param={code},day,,,10,'
-                with urllib.request.urlopen(url, timeout=8) as r:
+                with urllib.request.urlopen(url, timeout=6) as r:
                     data = json.loads(r.read().decode())
                 d = data['data'][code]
                 k = d.get('qfqday') or d.get('day') or []
-                break
+                if k:
+                    return k
             except Exception:
-                k = None
-        if k:
-            for bar in k:
-                dt = bar[0].replace('-', '')
-                if (code, dt) not in have:
-                    rows.append([code, bar[0], float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4]), float(bar[5])])
-        if i % 500 == 499:
-            print('  fetched %d/%d' % (i+1, len(codes)))
+                continue
+        return None
+
+    ok = 0
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        for i, k in enumerate(ex.map(fetch_one, codes)):
+            if k:
+                ok += 1
+                code = codes[i]
+                for bar in k:
+                    dt = bar[0].replace('-', '')
+                    if (code, dt) not in have:
+                        rows.append([code, bar[0], float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4]), float(bar[5])])
+            if i % 500 == 499:
+                print('  fetched %d/%d (ok=%d)' % (i+1, len(codes), ok), flush=True)
+    print('抓取成功 %d/%d 只' % (ok, len(codes)), flush=True)
     if rows:
         new = pd.DataFrame(rows, columns=['code','date','open','close','high','low','volume'])
         old = pd.concat([old, new]).drop_duplicates(['code','date']).sort_values(['code','date'])

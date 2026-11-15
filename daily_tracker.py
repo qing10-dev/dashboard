@@ -105,6 +105,8 @@ def build(days=20):
     df['ma5'] = g['close'].transform(lambda s: s.rolling(5, min_periods=3).mean())
     df['vol_ma5'] = g['volume'].transform(lambda s: s.shift(1).rolling(5, min_periods=3).mean())
     df['vrat'] = df['volume']/df['vol_ma5']
+    df['ma4_d0'] = g['close'].transform(lambda s: s.rolling(4, min_periods=4).mean())
+    df['vol_base'] = g['volume'].transform(lambda s: s.rolling(5, min_periods=5).mean())
     df['dn'] = (df['chg'] <= -0.02).astype(int)
     df['dn_run'] = df.groupby('code', sort=False)['dn'].transform(lambda s: s.groupby((s != s.shift()).cumsum()).cumsum())
     df['cpos'] = (df['close']-df['low'])/(df['high']-df['low']).replace(0, np.nan)
@@ -170,6 +172,7 @@ def build(days=20):
         '优先分': pool['优先分'],
         'D0收盘': pool['close'].round(2), 'D0最低价': pool['low'].round(2), 'D0跌幅%': (pool['chg']*100).round(1),
         '涨停距今天数': pool['lu_ago'].astype(int), 'D0量比': pool['vrat'].round(2),
+        '明日MA5参考': pool['ma4_d0'].round(2), '明日量比基准(手)': pool['vol_base'].round(0),
         '连跌天数': pool['dn_run'].astype(int), 'D0_K值': pool['K'].round(0),
         '状态': pool['状态'], '信号': pool['信号'],
         'D1日期': pool['d1_date'], 'D1最低(现)': pool['d1_low'].round(2), 'vs预警线': vs_jl,
@@ -278,7 +281,7 @@ def _table(cols, rows_df, bg='#fff'):
     return '<table style="background:%s;"><thead><tr>%s</tr></thead><tbody>%s</tbody></table>' % (bg, thead, trs)
 
 def to_html(out):
-    D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0_K值','信号']
+    D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0_K值','明日MA5参考','明日量比基准(手)','信号']
     D1_COLS = ['D0日期','代码','名称','信号','D1日期','D1最低(现)','vs预警线','收盘站回D0低','D1阳线','D1站回MA5','D1量比','D1涨幅%','D1收盘位置','K位置60日']
     D2_COLS = ['D0日期','代码','名称','信号','D1日期','D1涨幅%','D1收盘位置','D2涨幅%','D3涨幅%','D4涨幅%','D5涨幅%','确认后逐日','验证_后续大涨']
 
@@ -371,6 +374,9 @@ input#q{border:1px solid #aab7b8;border-radius:15px;padding:5px 14px;font-size:1
 
 <section class="zone" data-z="1">
 <h3 id="sec1"><span class="sec" style="background:#1a5276;">① 明日盯盘 __LAST__ 急跌入池 __NWATCH__ 只 → 重点前 __NTOP__</span></h3>
+<div class="note" style="margin:0 0 8px;">
+<b>明日(D1)四项核对基准，盘中 14:30 逐项比对：</b>① <b>预警线=D0最低价</b>（收盘须在其上方，盘中碰破等拉回）② <b>收阳</b>（收盘&gt;开盘，只能盘中看）③ <b>收盘 &gt; 「明日MA5参考」</b>（该值=近4日收盘均价，明日收盘价站上它即站回MA5）④ <b>成交量 ≥ 「明日量比基准(手)」</b>（该值=近5日均量，达到即量比≥1）。四项全中=确认，再看「D1收盘位置」和「D0跌幅%」定档位。
+</div>
 __WATCH__
 <details><summary>其余 __NREST__ 只（按优先分已排好，展开查看）</summary>__WATCH_REST__</details>
 </section>

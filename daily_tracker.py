@@ -43,6 +43,11 @@ def fetch_update():
                 continue
         return None
 
+    from datetime import datetime
+    now = datetime.now()
+    today = now.strftime('%Y-%m-%d')
+    after_close = now.hour >= 15   # 15点前的盘中K线是半根, 只进today_live.csv不污染历史
+    live_rows = []
     ok = 0
     with ThreadPoolExecutor(max_workers=16) as ex:
         for i, k in enumerate(ex.map(fetch_one, codes)):
@@ -51,8 +56,11 @@ def fetch_update():
                 code = codes[i]
                 for bar in k:
                     dt = bar[0].replace('-', '')
-                    if (code, dt) not in have:
-                        rows.append([code, bar[0], float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4]), float(bar[5])])
+                    row = [code, bar[0], float(bar[1]), float(bar[2]), float(bar[3]), float(bar[4]), float(bar[5])]
+                    if bar[0] == today and not after_close:
+                        live_rows.append(row)
+                    elif (code, dt) not in have:
+                        rows.append(row)
             if i % 500 == 499:
                 print('  fetched %d/%d (ok=%d)' % (i+1, len(codes), ok), flush=True)
     print('抓取成功 %d/%d 只' % (ok, len(codes)), flush=True)
@@ -63,9 +71,28 @@ def fetch_update():
         print('新增 %d 条K线, 数据截止 %s' % (len(rows), old['date'].max()))
     else:
         print('无新增数据')
+    if live_rows:
+        pd.DataFrame(live_rows, columns=['code','date','open','close','high','low','volume']).to_csv(
+            os.path.join(STK, 'today_live.csv'), index=False)
+        print('盘中实时数据 %d 条 -> today_live.csv (仅渲染用, 不写入历史)' % len(live_rows))
+    else:
+        _lp = os.path.join(STK, 'today_live.csv')
+        if after_close and os.path.exists(_lp):
+            os.remove(_lp)
 
 def build(days=20):
     df = pd.read_csv(CSV)
+    # 叠加盘中实时半根K线(仅本次渲染, 不回写历史CSV)
+    _live_p = os.path.join(STK, 'today_live.csv')
+    if os.path.exists(_live_p):
+        try:
+            _live = pd.read_csv(_live_p)
+            _live = _live[_live['date'] > df['date'].max()]
+            if len(_live):
+                df = pd.concat([df, _live], ignore_index=True)
+                print('已叠加盘中实时数据 %d 条 (截至 %s)' % (len(_live), _live['date'].max()))
+        except Exception:
+            pass
     df = df.sort_values(['code','date']).reset_index(drop=True)
     g = df.groupby('code', sort=False)
     df['prev_close'] = g['close'].shift(1)
@@ -362,7 +389,7 @@ __REVIEW__
 <h3 id="sec4"><span class="sec" style="background:#5d6d7e;">④ 说明书 · 胜率速查 —— 怎么用、每档什么胜率，都在这</span></h3>
 <div class="note">
 <b>▎每天怎么用（3步，共约5分钟）</b><br>
-<b>收盘后</b>：跑 <code>python daily_tracker.py --update</code> 刷新看板 → 看导航<b>①区</b>今天急跌入池了哪些新票（登记即可，不用操作）。<br>
+<b>收盘后</b>：跑 <code>python daily_tracker.py --update</code> 刷新看板（<b>盘中跑也安全</b>：实时半根K线只用于显示，不会污染历史数据，收盘后正式数据照常入库）→ 看导航<b>①区</b>今天急跌入池了哪些新票（登记即可，不用操作）。<br>
 <b>第二天盘中</b>：中午、14:30 各再跑一次 --update → 看<b>②区</b>「vs预警线」列盯破线（红底=盘中最低已触及D0最低，14:30后看收盘站不站得回来）。<br>
 <b>第二天14:30后</b>：核对四项定夺——①收盘站回D0最低价上方（上午碰破不要紧，尾盘还在线下=放弃）②收阳 ③站回MA5 ④量比≥1 → 通过则在 <b>13:00-14:55 买入，次日10:30前卖出</b>。<br>
 <b>▎信号档位胜率速查（10日内大涨≥6%）</b><br>

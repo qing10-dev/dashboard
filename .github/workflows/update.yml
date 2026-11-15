@@ -1,0 +1,27 @@
+name: daily-dashboard
+on:
+  schedule:
+    # UTC 07:35 = 北京时间 15:35，A股收盘后自动跑
+    - cron: '35 7 * * 1-5'
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pandas numpy
+      - name: 更新数据并生成看板
+        run: python daily_tracker.py --update
+      - name: 提交数据与看板
+        run: |
+          git config user.name "dashboard-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "daily update $(date -u +%F)"
+          git push

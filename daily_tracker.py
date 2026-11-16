@@ -140,6 +140,14 @@ def build(days=20):
         nk.columns = names_k
         pool = pool.merge(nk, on=['code', '_i'], how='left')
 
+    # 滚动核对日: 每只票在df中的最新一行(含盘中实时半根K线), 未确认票自动核对到最新交易日
+    _last = df.groupby('code', sort=False).tail(1)
+    _last = _last[['_i', 'code', 'date', 'open', 'close', 'low', 'vrat', 'chg', 'cpos', 'ma5']].rename(columns={
+        '_i': '_i_last', 'date': 'chk_date', 'open': 'chk_open', 'close': 'chk_close', 'low': 'chk_low',
+        'vrat': 'chk_vrat', 'chg': 'chk_chg', 'cpos': 'chk_cpos', 'ma5': 'chk_ma5'})
+    pool = pool.merge(_last, on='code', how='left')
+    pool['chk_k'] = pool['_i_last'] - pool['_i']   # 0=最新行就是D0(核对日未到), 1=D1, 2=D2...
+
     nnl = pool['d1_close'] > pool['low']   # 放宽口径: D1收盘站回D0最低价上方
     yang = pool['d1_close'] > pool['d1_open']
     above = pool['d1_close'] > pool['d1_ma5']
@@ -149,10 +157,40 @@ def build(days=20):
     top = strong & (pool['chg'] <= -0.06)
     weak = combo & (pool['d1_chg'] < 0.02)
     d1_exist = pool['d1_date'].notna()
+    # 滚动核对(核对日在D2~D5): 四项在最新交易日重新核对
+    nnl_c = pool['chk_close'] > pool['low']
+    yang_c = pool['chk_close'] > pool['chk_open']
+    above_c = pool['chk_close'] > pool['chk_ma5']
+    vok_c = pool['chk_vrat'] >= 1
+    combo_c = nnl_c & yang_c & above_c & vok_c
+    strong_c = combo_c & (pool['chk_cpos'] > 0.75)
+    top_c = strong_c & (pool['chg'] <= -0.06)
+    weak_c = combo_c & (pool['chk_chg'] < 0.02)
+    late_ok = (pool['chk_k'] >= 2) & (pool['chk_k'] <= 5) & d1_exist & (~combo)
     pool['信号'] = np.select(
-        [d1_exist & weak, d1_exist & top, d1_exist & strong, d1_exist & combo, d1_exist],
-        ['排雷回避(43%)', '顶格(89%档)', '强确认(86%档)', '确认(74%档)', '部分确认,继续观察'],
-        default='待确认(D1未到)')
+        [~d1_exist,
+         d1_exist & weak, d1_exist & top, d1_exist & strong, d1_exist & combo,
+         late_ok & weak_c, late_ok & top_c, late_ok & strong_c, late_ok & combo_c],
+        ['待确认(D1未到)',
+         '排雷回避(43%)', '顶格(89%档)', '强确认(86%档)', '确认(74%档)',
+         '排雷回避(43%)', '顶格(89%档)', '强确认(86%档)', '确认(74%档)'],
+        default='部分确认,继续观察')
+    # 核对日: 已确认票冻结在确认日; 未确认票滚动到最新交易日
+    use_d1 = d1_exist & combo
+    _d1s = pool['d1_date'].fillna('').astype(str)
+    _cks = pool['chk_date'].fillna('').astype(str)
+    _ckn = pool['chk_k'].fillna(0).astype(int)
+    pool['核对日期'] = np.where(use_d1, _d1s, np.where(_ckn >= 1, _cks, ''))
+    pool['核对日'] = np.where(use_d1, 'D1·' + _d1s.str[5:],
+                     np.where(_ckn >= 1, 'D' + _ckn.astype(str) + '·' + _cks.str[5:], ''))
+    _chk_low = np.where(use_d1, pool['d1_low'], pool['chk_low'])
+    _chk_vrat = np.where(use_d1, pool['d1_vrat'], pool['chk_vrat'])
+    _chk_chg = np.where(use_d1, pool['d1_chg'], pool['chk_chg'])
+    _chk_cpos = np.where(use_d1, pool['d1_cpos'], pool['chk_cpos'])
+    _m_nnl = np.where(use_d1, np.where(nnl, '√', '×'), np.where(_ckn >= 1, np.where(nnl_c, '√', '×'), '–'))
+    _m_yang = np.where(use_d1, np.where(yang, '√', '×'), np.where(_ckn >= 1, np.where(yang_c, '√', '×'), '–'))
+    _m_above = np.where(use_d1, np.where(above, '√', '×'), np.where(_ckn >= 1, np.where(above_c, '√', '×'), '–'))
+    _m_vok = np.where(use_d1, np.where(vok, '√', '×'), np.where(_ckn >= 1, np.where(vok_c, '√', '×'), '–'))
 
     pool['状态'] = np.where(d1_exist, 'D1已走完', 'D1待走(关注)')
     # D1盘中最低 vs D0预警线: 盘中跑--update时d1_low=当日实时最低, 收盘后=全日最低
@@ -181,12 +219,15 @@ def build(days=20):
         '明日MA5参考': pool['ma4_d0'].round(2), '明日量比基准(手)': pool['vol_base'].round(0),
         '连跌天数': pool['dn_run'].astype(int), 'D0_K值': pool['K'].round(0),
         '状态': pool['状态'], '信号': pool['信号'],
-        'D1日期': pool['d1_date'], 'D1最低(现)': pool['d1_low'].round(2), 'vs预警线': vs_jl,
-        '收盘站回D0低': np.where(d1_exist, np.where(nnl,'√','×'), ''),
-        'D1阳线': np.where(d1_exist, np.where(yang,'√','×'), ''),
-        'D1站回MA5': np.where(d1_exist, np.where(above,'√','×'), ''),
-        'D1量比': pool['d1_vrat'].round(2), 'D1涨幅%': (pool['d1_chg']*100).round(1),
-        'D1收盘位置': pool['d1_cpos'].round(2),
+        '核对日': pool['核对日'], '核对日期': pool['核对日期'],
+        'D1日期': pool['d1_date'],
+        '核对日最低(现)': pd.Series(_chk_low, index=pool.index).round(2), 'vs预警线': ((pd.Series(_chk_low, index=pool.index) / pool['low'] - 1) * 100).round(1),
+        '①站回D0低': _m_nnl,
+        '②阳线': _m_yang,
+        '③站回MA5': _m_above,
+        '④量比≥1': _m_vok,
+        '核对量比': pd.Series(_chk_vrat, index=pool.index).round(2), '核对日涨幅%': (pd.Series(_chk_chg, index=pool.index)*100).round(1),
+        '核对日收盘位置': pd.Series(_chk_cpos, index=pool.index).round(2),
         'K位置60日': (pool['pos60']*100).round(0).astype('Int64').astype(str).replace('<NA>', '')+'%',
         'D2涨幅%': (pool['d2_chg']*100).round(1), 'D3涨幅%': (pool['d3_chg']*100).round(1),
         'D4涨幅%': (pool['d4_chg']*100).round(1), 'D5涨幅%': (pool['d5_chg']*100).round(1),
@@ -255,7 +296,7 @@ def _row(r, cols, live=False):
                 tds.append('<td class="d0px" style="%s"><span style="color:#7f8c8d;font-size:11px;">中性</span></td>' % style)
         elif col == 'D0最低价':
             tds.append('<td style="%s"><b style="color:#c0392b;">%s</b></td>' % (style, v))
-        elif col == 'D1最低(现)':
+        elif col == '核对日最低(现)':
             tds.append('<td class="lv-low" style="%s">%s</td>' % (style, v if pd.notna(v) else '·'))
         elif col == 'vs预警线':
             if pd.isna(v):
@@ -264,13 +305,15 @@ def _row(r, cols, live=False):
                 tds.append('<td class="lv-vs" style="%s;background:#fdedec;"><b style="color:#c0392b;">破线</b></td>' % style)
             else:
                 tds.append('<td class="lv-vs" style="%s"><b style="color:#1e8449;">+%s%%</b></td>' % (style, v))
-        elif col in ('收盘站回D0低', 'D1阳线', 'D1站回MA5'):
+        elif col in ('①站回D0低', '②阳线', '③站回MA5', '④量比≥1'):
             tds.append('<td style="%s">%s</td>' % (style, _chk(v)))
+        elif col == '核对日':
+            tds.append('<td style="%s"><b style="color:#1a5276;">%s</b></td>' % (style, v if v else '–'))
         elif col == 'D0跌幅%':
             tds.append(_chg_cell(v, bold=True))
-        elif col in ('D1涨幅%', 'D2涨幅%', 'D3涨幅%', 'D4涨幅%', 'D5涨幅%'):
+        elif col in ('核对日涨幅%', 'D2涨幅%', 'D3涨幅%', 'D4涨幅%', 'D5涨幅%'):
             tds.append(_chg_cell(v))
-        elif col == 'D1收盘位置':
+        elif col == '核对日收盘位置':
             ok = pd.notna(v) and v > 0.75
             tds.append('<td style="%s">%s</td>' % (style,
                 '<b style="color:#1e8449;">%s ↑</b>' % v if ok else ('%s' % v if pd.notna(v) else '·')))
@@ -296,7 +339,8 @@ def _row(r, cols, live=False):
         if pd.notna(base):
             attrs += ' data-d0low="%.2f"' % base
         if live == 'd1':
-            d1d = str(r['D1日期']).replace('-', '') if pd.notna(r.get('D1日期')) else ''
+            _cd = str(r.get('核对日期') or '')
+            d1d = _cd.replace('-', '') if _cd else ''
             attrs += ' data-d1date="%s"' % d1d
         attrs += ' data-name="%s"' % str(r['名称']).replace('"', '')
     pxv = str(r['D0性质']) if 'D0性质' in r.index else ''
@@ -311,8 +355,8 @@ def _table(cols, rows_df, bg='#fff', live=False):
 
 def to_html(out):
     D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0性质','D0_K值','明日MA5参考','明日量比基准(手)','信号']
-    D1_COLS = ['D0日期','代码','名称','信号','D1日期','D1最低(现)','vs预警线','收盘站回D0低','D1阳线','D1站回MA5','D1量比','D1涨幅%','D1收盘位置','K位置60日']
-    D2_COLS = ['D0日期','代码','名称','信号','D1日期','D1涨幅%','D1收盘位置','D2涨幅%','D3涨幅%','D4涨幅%','D5涨幅%','确认后逐日','验证_后续大涨']
+    D1_COLS = ['D0日期','代码','名称','信号','核对日','核对日最低(现)','vs预警线','①站回D0低','②阳线','③站回MA5','④量比≥1','核对量比','核对日涨幅%','核对日收盘位置','K位置60日']
+    D2_COLS = ['D0日期','代码','名称','信号','核对日','核对日涨幅%','核对日收盘位置','D2涨幅%','D3涨幅%','D4涨幅%','D5涨幅%','确认后逐日','验证_后续大涨']
 
     last = out['D0日期'].max()
     import time as _t
@@ -322,9 +366,10 @@ def to_html(out):
     watch = out[(out['D0日期']==last) & (out['信号']=='待确认(D1未到)')].sort_values('优先分', ascending=False)
     watch_top = watch.head(30)
     n4 = int((watch['优先分']>=4).sum()); n3 = int((watch['优先分']==3).sum())
-    # ② 今日信号: 最近两个D1日
-    d1_dates = sorted(out.loc[out['状态']=='D1已走完', 'D1日期'].dropna().unique())
-    sig_recent = out[(out['状态']=='D1已走完') & out['信号'].isin(CONFIRMED) & out['D1日期'].isin(d1_dates[-2:])]
+    # ② 今日信号: 最近两个核对日(D1或滚动D2~D5)的确认结果
+    _cd_series = out.loc[out['信号'].isin(CONFIRMED), '核对日期'].replace('', np.nan)
+    chk_dates = sorted(_cd_series.dropna().unique())
+    sig_recent = out[out['信号'].isin(CONFIRMED) & out['核对日期'].isin(chk_dates[-2:])]
     # ③ 复盘: 最近10个D0日的确认信号
     recent_d0 = sorted(out['D0日期'].unique())[-10:]
     review = out[(out['D0日期'].isin(recent_d0)) & out['信号'].isin(CONFIRMED)].sort_values(['D0日期','信号'], ascending=[False, True])
@@ -458,14 +503,15 @@ tr.brkrow{background:#fff2f0 !important;}
 <section class="zone" data-z="1">
 <h3 id="sec1"><span class="sec" style="background:#1a5276;">① 明日盯盘 __LAST__ 急跌入池 __NWATCH__ 只 → 重点前 __NTOP__</span></h3>
 <div class="note" style="margin:0 0 8px;">
-<b>明日(D1)四项核对基准，盘中 14:30 逐项比对：</b>① <b>预警线=D0最低价</b>（收盘须在其上方，盘中碰破等拉回）② <b>收阳</b>（收盘&gt;开盘，只能盘中看）③ <b>收盘 &gt; 「明日MA5参考」</b>（该值=近4日收盘均价，明日收盘价站上它即站回MA5）④ <b>成交量 ≥ 「明日量比基准(手)」</b>（该值=近5日均量，达到即量比≥1）。四项全中=确认，再看「D1收盘位置」和「D0跌幅%」定档位。<br>
+<b>明日(D1)四项核对基准，盘中 14:30 逐项比对：</b>① <b>预警线=D0最低价</b>（收盘须在其上方，盘中碰破等拉回）② <b>收阳</b>（收盘&gt;开盘，只能盘中看）③ <b>收盘 &gt; 「明日MA5参考」</b>（该值=近4日收盘均价，明日收盘价站上它即站回MA5）④ <b>成交量 ≥ 「明日量比基准(手)」</b>（该值=近5日均量，达到即量比≥1）。四项全中=确认，再看「核对日收盘位置」和「D0跌幅%」定档位。<br>
+<b>滚动核对：</b>没确认的票不用只盯一天——看板每天自动拿<b>最新交易日</b>重新核对四项（②区「核对日」列显示核到第几天，如 D3·11-13），四项哪天全中、哪天就是确认日；最多盯到 D5，「涨停距今天数」&gt;10 自动失效。<br>
 <b>「D0性质」怎么用：</b><span class="chip up">● 偏洗盘</span>放量+涨停新鲜，次日确认率15.5%，<b>重点盯</b>；<span class="chip dn">▼ 偏出货</span>缩量无承接，确认率仅3.0%，<b>直接跳过</b>；中性正常走流程。「筛选→偏洗盘」可一键只看重点。详见④说明书。</div>
 __WATCH__
 <details><summary>其余 __NREST__ 只（按优先分已排好，展开查看）</summary>__WATCH_REST__</details>
 </section>
 
 <section class="zone" data-z="2">
-<h3 id="sec2"><span class="sec" style="background:#b8860b;">② 今日信号：截至 __SIGDATE__ 的确认结果（__NSIG__ 只）—— D1信息在这看</span></h3>
+<h3 id="sec2"><span class="sec" style="background:#b8860b;">② 今日信号：最近两个核对日的确认结果（__NSIG__ 只）—— 四项逐项打勾在这看</span></h3>
 __SIG__
 </section>
 
@@ -489,9 +535,11 @@ __REVIEW__
 <tr><td>强确认(86%档)</td><td>四项全中 + 收上沿&gt;0.75</td><td style="color:#d35400;font-weight:700;">86.0%</td><td>买入</td></tr>
 <tr><td>确认(74%档)</td><td>四项全中</td><td style="color:#b8860b;font-weight:700;">74.1%</td><td>轻仓或观望</td></tr>
 <tr><td>排雷(43%)</td><td>确认但D1涨幅&lt;2%（温和反抽）</td><td style="color:#7f8c8d;">43.0%</td><td>回避</td></tr>
-<tr><td>部分确认</td><td>四项没凑齐</td><td>—</td><td>留池观察，哪天凑齐算哪天</td></tr>
+<tr><td>部分确认</td><td>四项没凑齐</td><td>—</td><td>留池观察，看板自动滚动核对，哪天凑齐算哪天（最多D5）</td></tr>
 </tbody></table>
 <b>▎有效期提醒</b>：涨停基因的加成集中在<b>涨停后10个交易日内</b>（10日窗口大涨率48.6% vs 无涨停23.5%），「涨停距今天数」&gt;10 的票自动失效。<br>
+<b>▎「核对日」与四项逐项打勾（②区）</b><br>
+每只票四个信号 <span style="color:#1e8449;font-weight:700;">●</span>到位 / <span style="color:#c0392b;font-weight:700;">✗</span>未到位 / <span style="color:#bdc3c7;">–</span>还没轮到，逐项标在②区表格里。「核对日」列显示当前核到第几天：D1 没凑齐的票会<b>自动滚动到最新交易日继续核</b>（近一年回测：27% 的票要等 D2~D5 才确认，且晚确认质量不打折——D1 43.6% / D2 47.3% / D5 48.7%）。四项全中的当天就是<b>确认日</b>，当天 13:00-14:55 买入、次日卖；超过 5 天还没凑齐或「涨停距今天数」&gt;10，放弃。<br>
 <b>▎「D0性质」—— 今天这根急跌是洗盘还是出货？（全历史 n=26608 回测）</b><br>
 <span class="chip up">● 偏洗盘</span> = <b>放量急跌(量比≥1.2) + 涨停1~2天内</b>：下跌有承接、分歧换手充分，次日反抽概率最高，<b>确认率 15.5%</b>（基线7.3%的2倍+），优先盯。<br>
 <span class="chip dn">▼ 偏出货</span> = <b>缩量阴跌(量比&lt;0.7)</b>：没有资金接、阴跌磨人，次日确认率仅 <b>3.0%</b>；其中缩量+涨停1~2天的最坑，确认后次日卖出均值 <b>-2.29%</b>（全表最差），直接跳过、别浪费精力。<br>
@@ -627,7 +675,7 @@ setTimeout(lvRefresh,600);
         .replace('__WATCH_REST__', _table(D0_COLS, watch.iloc[30:], '#fdfefe', live='price') if len(watch)>30 else '') \
         .replace('__WATCH__', _table(D0_COLS, watch_top, '#fdfefe', live='price')) \
         .replace('__NREST__', str(max(0, len(watch)-len(watch_top)))) \
-        .replace('__SIGDATE__', (d1_dates[-1] if d1_dates else '-')) \
+        .replace('__SIGDATE__', (chk_dates[-1] if chk_dates else '-')) \
         .replace('__NSIG__', str(len(sig_recent))) \
         .replace('__SIG__', _table(D1_COLS, sig_recent, '#fdfefe', live='d1') if len(sig_recent) else '<p style="color:#7f8c8d;">最近两个确认日无确认信号</p>') \
         .replace('__REVIEW__', _table(D2_COLS, review, '#fdfefe') if len(review) else '')

@@ -336,8 +336,9 @@ def to_html(out):
     html = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5"><title>急跌候选池·决策看板</title>
 <style>
 body{font-family:-apple-system,'PingFang SC',sans-serif;margin:16px 20px;color:#2c3e50;font-size:13px;background:#f4f6f7;}
-h2{margin:6px 0 10px;} h3{margin:24px 0 8px;scroll-margin-top:56px;}
-.nav{position:sticky;top:37px;z-index:98;background:#2c3e50;border-radius:8px;padding:7px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 6px;box-shadow:0 1px 4px rgba(0,0,0,.15);}
+h2{margin:6px 0 10px;} h3{margin:24px 0 8px;scroll-margin-top:calc(var(--hd,76px) + 8px);}
+.headbar{position:sticky;top:0;z-index:98;margin:8px 0 6px;}
+.nav{background:#2c3e50;border-radius:8px;padding:7px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;box-shadow:0 1px 4px rgba(0,0,0,.15);margin-top:6px;}
 .nav b{color:#fff;font-size:13px;}
 .zbtn{border:1px solid #5d6d7e;background:#34495e;border-radius:14px;padding:4px 14px;cursor:pointer;font-size:13px;color:#fff;}
 .zbtn.on{background:#fff;color:#2c3e50;font-weight:600;border-color:#fff;}
@@ -352,7 +353,7 @@ h2{margin:6px 0 10px;} h3{margin:24px 0 8px;scroll-margin-top:56px;}
 .csub{color:#7f8c8d;font-size:12px;margin-top:2px;}
 table{border-collapse:collapse;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:6px;}
 td,th{border:1px solid #d5dbdb;text-align:center;}
-th{padding:5px 8px;background:#2c3e50;color:#fff;white-space:nowrap;position:sticky;top:76px;}
+th{padding:5px 8px;background:#2c3e50;color:#fff;white-space:nowrap;position:sticky;top:var(--hd,76px);}
 tbody tr:hover{background:#ebf5fb !important;}
 .note{background:#fef9e7;border:1px solid #f7dc6f;padding:10px 14px;border-radius:6px;margin:8px 0;line-height:1.8;max-width:1000px;}
 .sec{color:#fff;padding:4px 10px;border-radius:4px;display:inline-block;}
@@ -365,7 +366,7 @@ details{margin:4px 0 14px;} summary{cursor:pointer;color:#2e86c1;font-size:13px;
 button{border:1px solid #aab7b8;background:#fff;border-radius:15px;padding:4px 14px;cursor:pointer;font-size:13px;color:#2c3e50;}
 button.on{background:#2c3e50;color:#fff;border-color:#2c3e50;}
 input#q{border:1px solid #aab7b8;border-radius:15px;padding:5px 14px;font-size:13px;width:200px;outline:none;}
-.livebar{position:sticky;top:0;z-index:98;display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:#0e6251;color:#fff;border-radius:8px;padding:6px 14px;margin:8px 0 6px;font-size:13px;box-shadow:0 1px 5px rgba(0,0,0,.2);}
+.livebar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:#0e6251;color:#fff;border-radius:8px;padding:6px 14px;font-size:13px;box-shadow:0 1px 5px rgba(0,0,0,.2);}
 .livebar b{color:#fff;}
 .livebar .dot{width:9px;height:9px;border-radius:50%;background:#2ecc71;display:inline-block;animation:pl 1.6s infinite;}
 .livebar .dot.off{background:#f39c12;animation:none;}
@@ -375,15 +376,17 @@ input#q{border:1px solid #aab7b8;border-radius:15px;padding:5px 14px;font-size:1
 .brk{background:#fdedec;color:#c0392b;font-size:11px;border-radius:3px;padding:0 4px;font-weight:700;}
 tr.brkrow{background:#fff2f0 !important;}
 .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;}
+@media (min-width:821px){.tw{overflow-x:visible;}}
 @media (max-width:820px){
   body{padding:8px 8px 40px;}
   h2{font-size:16px;line-height:1.4;}
   h2 small{display:block;font-size:11px;margin-top:2px;}
   h3{font-size:13px;margin:14px 0 6px;}
   .sec{padding:3px 7px;font-size:12px;}
-  .livebar{position:static;font-size:12px;gap:6px;padding:6px 10px;}
+  .headbar{position:static;}
+  .livebar{font-size:12px;gap:6px;padding:6px 10px;}
   .livebar .lvnote{display:none;}
-  .nav{position:static;font-size:12px;gap:6px;padding:6px 8px;}
+  .nav{font-size:12px;gap:6px;padding:6px 8px;}
   .nav .tip{display:none;}
   .zbtn{padding:4px 10px;font-size:12px;}
   .cards{gap:6px;}
@@ -402,6 +405,7 @@ tr.brkrow{background:#fff2f0 !important;}
 </style></head><body>
 <h2>急跌候选池 · 决策看板 <small style="color:#7f8c8d;font-size:13px;">数据截止 __LAST__（__WK__）__LIVENOTE__</small></h2>
 <div class="cards">__CARDS__</div>
+<div class="headbar" id="headbar">
 <div class="livebar" id="livebar">
 <span class="dot" id="lvdot"></span>
 <b>实时行情</b>
@@ -421,6 +425,7 @@ tr.brkrow{background:#fff2f0 !important;}
 <button class="zbtn" onclick="zone('3',this)">③ 复盘走势</button>
 <button class="zbtn" onclick="zone('4',this)">④ 说明书·胜率速查</button>
 <span class="tip">点一下只看该区 · 「全部」看全貌</span>
+</div>
 </div>
 <div class="fbar">
 <b style="color:#7f8c8d;">筛选:</b>
@@ -495,6 +500,15 @@ function apply(){
 }
 apply();
 
+/* ================= 吸附头高度动态测量（防错位） ================= */
+function hdFix(){
+  var h=document.getElementById('headbar');
+  if(h)document.documentElement.style.setProperty('--hd',h.offsetHeight+'px');
+}
+window.addEventListener('resize',hdFix);
+window.addEventListener('load',hdFix);
+hdFix();
+
 /* ================= 实时行情刷新（腾讯行情 · 跨域 script 注入） ================= */
 var lvOn=true, lvTimer=null, lvCodes=[], lvQuotes={};
 function lvToday(){var d=new Date();return ''+d.getFullYear()+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);}
@@ -558,6 +572,7 @@ function lvDone(){
     +' · 更新 '+hh+' · 覆盖 '+r.ok+'/'+lvCodes.length+' 只';
   document.getElementById('lvbrk1').textContent=r.b1;
   document.getElementById('lvbrk2').textContent=r.b2;
+  hdFix();
   var dot=document.getElementById('lvdot');
   dot.className='dot'+(lvOn?'':(sess?'':' off'));
   clearTimeout(lvTimer);
@@ -578,6 +593,7 @@ function lvToggle(){
   lvOn=!lvOn;
   document.getElementById('lvbtn').textContent=lvOn?'暂停':'继续';
   document.getElementById('lvmsg').innerHTML=lvOn?'继续刷新中…':'已暂停（点「继续」恢复）';
+  hdFix();
   clearTimeout(lvTimer);
   if(lvOn)lvRefresh();
 }

@@ -177,7 +177,7 @@ def build(days=20):
         '优先分': pool['优先分'],
         'D0收盘': pool['close'].round(2), 'D0最低价': pool['low'].round(2), 'D0跌幅%': (pool['chg']*100).round(1),
         '涨停距今天数': pool['lu_ago'].astype(int), 'D0量比': pool['vrat'].round(2),
-        'D0性质': pool['D0性质'],
+        'D0性质': pool['D0性质'], 'D0收盘位置': pool['cpos'].round(2),
         '明日MA5参考': pool['ma4_d0'].round(2), '明日量比基准(手)': pool['vol_base'].round(0),
         '连跌天数': pool['dn_run'].astype(int), 'D0_K值': pool['K'].round(0),
         '状态': pool['状态'], '信号': pool['信号'],
@@ -253,6 +253,15 @@ def _row(r, cols, live=False):
                 tds.append('<td class="d0px" style="%s"><span style="color:%s;background:%s;border-radius:3px;padding:1px 5px;font-weight:700;font-size:11px;">%s</span></td>' % (style, c, bgc, txt))
             else:
                 tds.append('<td class="d0px" style="%s"><span style="color:#7f8c8d;font-size:11px;">中性</span></td>' % style)
+        elif col == 'D0收盘位置':
+            if pd.isna(v):
+                tds.append('<td style="%s"><span style="color:#bdc3c7;">·</span></td>' % style)
+            elif v > 0.6:
+                tds.append('<td style="%s"><b style="color:#1e8449;">%.2f 收上沿</b></td>' % (style, v))
+            elif v < 0.25:
+                tds.append('<td style="%s"><b style="color:#c0392b;">%.2f 光脚阴</b></td>' % (style, v))
+            else:
+                tds.append('<td style="%s"><span style="color:#7f8c8d;">%.2f</span></td>' % (style, v))
         elif col == 'D0最低价':
             tds.append('<td style="%s"><b style="color:#c0392b;">%s</b></td>' % (style, v))
         elif col == 'D1最低(现)':
@@ -310,7 +319,7 @@ def _table(cols, rows_df, bg='#fff', live=False):
     return '<div class="tw"><table style="background:%s;"><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (bg, thead, trs)
 
 def to_html(out):
-    D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0性质','D0_K值','明日MA5参考','明日量比基准(手)','信号']
+    D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0收盘位置','D0性质','D0_K值','明日MA5参考','明日量比基准(手)','信号']
     D1_COLS = ['D0日期','代码','名称','信号','D1日期','D1最低(现)','vs预警线','收盘站回D0低','D1阳线','D1站回MA5','D1量比','D1涨幅%','D1收盘位置','K位置60日']
     D2_COLS = ['D0日期','代码','名称','信号','D1日期','D1涨幅%','D1收盘位置','D2涨幅%','D3涨幅%','D4涨幅%','D5涨幅%','确认后逐日','验证_后续大涨']
 
@@ -491,6 +500,11 @@ __REVIEW__
 <tr><td>排雷(43%)</td><td>确认但D1涨幅&lt;2%（温和反抽）</td><td style="color:#7f8c8d;">43.0%</td><td>回避</td></tr>
 <tr><td>部分确认</td><td>四项没凑齐</td><td>—</td><td>留池观察，哪天凑齐算哪天</td></tr>
 </tbody></table>
+<b>▎「回调到位」怎么判？（全历史 n=26843 回测，四维全部验证过）</b><br>
+<b>结论先说：到位不是"算"出来的，是"打"出来的。</b>跌幅多深、跌了几天、缩量多少、踩没踩黄金分割位——这些位置类指标<b>全都没有判别力</b>，别拿它们抄底。<br>
+<b>✓ 有效信号（唯一强项：当天的收盘行为）</b>：<span class="chip up">D0收盘位置&gt;0.6</span>（收在全天上沿=跌幅被买盘接回去）→ 后续5日守住D0低点概率 <b>41.7%</b>（光脚阴仅19.6%）、D1买D2卖均值 <b>+0.20%</b>（全表唯一转正）。反之收盘在下沿25%以下（光脚长阴）＝没人接，守住概率19.6%。<br>
+<b>✗ 无效信号（实测无优势，别用）</b>：①回撤深度——回撤30~45%的10日大涨率57.4%但守低点只有18.8%，深跌票弹性大但底不稳；②斐波那契回吐50~62%黄金位——47.7%，与基线46.4%几乎一样；③缩量到位——地量（量&lt;涨停日30%）10日大涨率仅 <b>39.1%，最差</b>，缩量=没人要，不是筹码稳定；④时间——5~7天略优但差异不大。<br>
+<b>→ 实操三步</b>：①D0收盘看「D0收盘位置」是否收上沿（有承接）；②D1盘中看②区「vs预警线」是否始终在0上方（低点不破=底成立）；③<b>14:30后</b>看四项是否凑齐（这才是"到位"的操作化定义，13:30 时点判断只有82%最终成立，14:00 达89.7%，上午不算数）。<br>
 <b>▎有效期提醒</b>：涨停基因的加成集中在<b>涨停后10个交易日内</b>（10日窗口大涨率48.6% vs 无涨停23.5%），「涨停距今天数」&gt;10 的票自动失效。<br>
 <b>▎「D0性质」—— 今天这根急跌是洗盘还是出货？（全历史 n=26608 回测）</b><br>
 <span class="chip up">● 偏洗盘</span> = <b>放量急跌(量比≥1.2) + 涨停1~2天内</b>：下跌有承接、分歧换手充分，次日反抽概率最高，<b>确认率 15.5%</b>（基线7.3%的2倍+），优先盯。<br>

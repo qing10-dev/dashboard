@@ -7,17 +7,17 @@
 输出:
   watchlist_tracker.csv  (Excel 可直接打开, 含D1~D5逐日涨幅)
   watchlist_tracker.html (仪表盘: 汇总卡片/红绿着色/逐日走势串/筛选搜索)
-逻辑(最初设想口径: 涨停回踩+KDJ低位, 2026-11-17全量重回测):
-  入选池: 30日内有涨停(回踩中) 且 日线KDJ K<20 (30分钟K<20的日线近似)
-  D1确认(四项): 收盘站回D0最低价 + 阳线 + 站回MA5 + 量比>=1 -> 胜率44.2% 均值-0.20% (D1尾盘买D2收卖, 近一年n=5430)
-  强确认: + D1收盘位置>0.75 -> 44.6% (n=3061);  顶格: + D0跌幅<=-4% -> 52.0% 均值+0.25% (n=273, 唯一转正档)
-  V反候选: D1放量阴线(量比>=1.3)且未站回D0最低 -> 54.3% 均值+0.26% (n=1163, 恐慌盘被打出的反抽)
+逻辑(全部来自前期回测结论):
+  入选池: 当日跌幅<=-4% 且 20日内有涨停
+  D1确认(放宽口径): 收盘站回D0最低价 + 阳线 + 站回MA5 + 量比>=1 -> 10日内大涨 74.1% (n=1702)
+  强确认: + D1收盘位置>0.75 -> 86.0% (n=1041);  顶格: + D0急跌<=-6% -> 89.5% (n=476)
+  排雷:   D1确认但当日涨幅<2%(温和反抽) -> 43.0%, 回避
 """
 import pandas as pd, numpy as np, sys, json, os, datetime
 
 STK = os.environ.get('STKBT', os.path.dirname(os.path.abspath(__file__)))
 CSV = os.path.join(STK, 'kline_all.csv')
-CONFIRMED = ['顶格(52%档)', '强确认(45%档)', '确认(44%档)', 'V反候选(54%档)']
+CONFIRMED = ['顶格(89%档)', '强确认(86%档)', '确认(74%档)', '排雷回避(43%)']
 
 def fetch_update():
     """增量抓取最近10个交易日日线, 合并进 kline_all.csv (16线程并发)"""
@@ -126,8 +126,7 @@ def build(days=20):
     df['big_day'] = np.where(big_mat.any(axis=1), big_mat.argmax(axis=1)+1, np.nan)
 
     last_dates = sorted(df['date'].unique())[-days:]
-    # 最初设想口径: 30日内涨停(回踩中) + 日线KDJ K<20 超卖
-    pool = df[(df['lu_ago'] >= 1) & (df['lu_ago'] <= 30) & (df['K'] < 20) & df['date'].isin(last_dates)].copy()
+    pool = df[(df['chg'] <= -0.04) & (df['lu_ago'].notna()) & (df['lu_ago'] <= 20) & df['date'].isin(last_dates)].copy()
     # D1~D5 逐日: 按 code+_i 对齐(D0后第k个交易日), 双键防跨代码泄漏
     for k in range(1, 6):
         nk = df.copy()
@@ -147,13 +146,12 @@ def build(days=20):
     vok = pool['d1_vrat'] >= 1
     combo = nnl & yang & above & vok
     strong = combo & (pool['d1_cpos'] > 0.75)
-    top = strong & (pool['chg'] <= -0.04)
-    # V反候选(新池n=1163回测54.3%/+0.26%): D1放量阴线且未站回D0最低=恐慌盘被打出, 随后反抽
-    vrev = (~nnl) & (~yang) & (pool['d1_vrat'] >= 1.3)
+    top = strong & (pool['chg'] <= -0.06)
+    weak = combo & (pool['d1_chg'] < 0.02)
     d1_exist = pool['d1_date'].notna()
     pool['信号'] = np.select(
-        [d1_exist & vrev, d1_exist & top, d1_exist & strong, d1_exist & combo, d1_exist],
-        ['V反候选(54%档)', '顶格(52%档)', '强确认(45%档)', '确认(44%档)', '部分确认,继续观察'],
+        [d1_exist & weak, d1_exist & top, d1_exist & strong, d1_exist & combo, d1_exist],
+        ['排雷回避(43%)', '顶格(89%档)', '强确认(86%档)', '确认(74%档)', '部分确认,继续观察'],
         default='待确认(D1未到)')
 
     pool['状态'] = np.where(d1_exist, 'D1已走完', 'D1待走(关注)')
@@ -167,8 +165,8 @@ def build(days=20):
 
     names = pd.read_csv(os.path.join(STK, 'universe.csv'))[['code','name']]
     pool = pool.merge(names, on='code', how='left')
-    pool['优先分'] = ((pool['chg'] <= -0.04).astype(int) + (pool['chg'] <= -0.06).astype(int)
-        + (pool['lu_ago'] <= 10).astype(int) + (pool['K'] < 12).astype(int))
+    pool['优先分'] = ((pool['chg'] <= -0.06).astype(int) + (pool['chg'] <= -0.08).astype(int)
+        + (pool['lu_ago'] <= 5).astype(int) + (pool['K'] > 75).astype(int))
     # D0性质判别(全历史n=26608回测): 放量急跌+涨停新鲜=有承接(确认率15.5%), 缩量阴跌=无承接(确认率3.0%)
     pool['D0性质'] = np.select(
         [(pool['vrat'] >= 1.2) & (pool['lu_ago'] <= 2),
@@ -179,12 +177,11 @@ def build(days=20):
         '优先分': pool['优先分'],
         'D0收盘': pool['close'].round(2), 'D0最低价': pool['low'].round(2), 'D0跌幅%': (pool['chg']*100).round(1),
         '涨停距今天数': pool['lu_ago'].astype(int), 'D0量比': pool['vrat'].round(2),
-        'D0性质': pool['D0性质'], 'D0收盘位置': pool['cpos'].round(2),
+        'D0性质': pool['D0性质'],
         '明日MA5参考': pool['ma4_d0'].round(2), '明日量比基准(手)': pool['vol_base'].round(0),
         '连跌天数': pool['dn_run'].astype(int), 'D0_K值': pool['K'].round(0),
         '状态': pool['状态'], '信号': pool['信号'],
         'D1日期': pool['d1_date'], 'D1最低(现)': pool['d1_low'].round(2), 'vs预警线': vs_jl,
-        'D1收盘(买)': pool['d1_close'].round(2),
         '收盘站回D0低': np.where(d1_exist, np.where(nnl,'√','×'), ''),
         'D1阳线': np.where(d1_exist, np.where(yang,'√','×'), ''),
         'D1站回MA5': np.where(d1_exist, np.where(above,'√','×'), ''),
@@ -204,8 +201,8 @@ def _wk(d):
     return ['周一','周二','周三','周四','周五','周六','周日'][datetime.date(*map(int, d.split('-'))).weekday()]
 
 def _sig_color(sig):
-    return {'V反候选(54%档)':'#7d3c98','顶格(52%档)':'#c0392b','强确认(45%档)':'#d35400','确认(44%档)':'#b8860b',
-            '待确认(D1未到)':'#1a5276'}.get(sig, '#5d6d7e')
+    return {'顶格(89%档)':'#c0392b','强确认(86%档)':'#d35400','确认(74%档)':'#b8860b',
+            '排雷回避(43%)':'#7f8c8d','待确认(D1未到)':'#1a5276'}.get(sig, '#5d6d7e')
 
 def _chk(v):
     """确认项符号: 达标=绿点, 未达标=红叉, 未走=灰杠"""
@@ -242,7 +239,7 @@ def _path_chips(r):
 def _row(r, cols, live=False):
     tds = []
     for col in cols:
-        v = None if col in ('确认后逐日', '今日盈亏') else r[col]
+        v = None if col == '确认后逐日' else r[col]
         style = 'padding:3px 7px;white-space:nowrap;'
         if col == '信号':
             tds.append('<td style="%s"><b style="color:%s;">%s</b></td>' % (style, _sig_color(v), v))
@@ -256,23 +253,10 @@ def _row(r, cols, live=False):
                 tds.append('<td class="d0px" style="%s"><span style="color:%s;background:%s;border-radius:3px;padding:1px 5px;font-weight:700;font-size:11px;">%s</span></td>' % (style, c, bgc, txt))
             else:
                 tds.append('<td class="d0px" style="%s"><span style="color:#7f8c8d;font-size:11px;">中性</span></td>' % style)
-        elif col == 'D0收盘位置':
-            if pd.isna(v):
-                tds.append('<td style="%s"><span style="color:#bdc3c7;">·</span></td>' % style)
-            elif v > 0.6:
-                tds.append('<td style="%s"><b style="color:#1e8449;">%.2f 收上沿</b></td>' % (style, v))
-            elif v < 0.25:
-                tds.append('<td style="%s"><b style="color:#c0392b;">%.2f 光脚阴</b></td>' % (style, v))
-            else:
-                tds.append('<td style="%s"><span style="color:#7f8c8d;">%.2f</span></td>' % (style, v))
         elif col == 'D0最低价':
             tds.append('<td style="%s"><b style="color:#c0392b;">%s</b></td>' % (style, v))
         elif col == 'D1最低(现)':
             tds.append('<td class="lv-low" style="%s">%s</td>' % (style, v if pd.notna(v) else '·'))
-        elif col == 'D1收盘(买)':
-            tds.append('<td style="%s"><b>%s</b></td>' % (style, v if pd.notna(v) else '·'))
-        elif col == '今日盈亏':
-            tds.append('<td class="lv-pnl" style="%s;color:#95a5a6;">…</td>' % style)
         elif col == 'vs预警线':
             if pd.isna(v):
                 tds.append('<td class="lv-vs" style="%s"><span style="color:#bdc3c7;">–</span></td>' % style)
@@ -302,7 +286,7 @@ def _row(r, cols, live=False):
     star = r['优先分']
     bg = ''
     if sig == '待确认(D1未到)' and star >= 4: bg = 'background:#fdebd0;'
-    elif 'V反' in sig: bg = 'background:#f4ecf7;'
+    elif '排雷' in sig: bg = 'background:#f2f4f4;'
     if live:
         tds.append('<td class="lq" style="padding:3px 7px;white-space:nowrap;color:#95a5a6;">…</td>')
     attrs = ''
@@ -314,10 +298,6 @@ def _row(r, cols, live=False):
         if live == 'd1':
             d1d = str(r['D1日期']).replace('-', '') if pd.notna(r.get('D1日期')) else ''
             attrs += ' data-d1date="%s"' % d1d
-        if live == 'sell':
-            b = r.get('D1收盘(买)')
-            if pd.notna(b):
-                attrs += ' data-buy="%.2f"' % b
         attrs += ' data-name="%s"' % str(r['名称']).replace('"', '')
     pxv = str(r['D0性质']) if 'D0性质' in r.index else ''
     return '<tr data-star="%d" data-sig="%s" data-px="%s"%s%s>%s</tr>' % (star, sig, pxv, attrs, (' style="%s"' % bg if bg else ''), ''.join(tds))
@@ -330,7 +310,7 @@ def _table(cols, rows_df, bg='#fff', live=False):
     return '<div class="tw"><table style="background:%s;"><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (bg, thead, trs)
 
 def to_html(out):
-    D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0收盘位置','D0性质','D0_K值','明日MA5参考','明日量比基准(手)','信号']
+    D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0性质','D0_K值','明日MA5参考','明日量比基准(手)','信号']
     D1_COLS = ['D0日期','代码','名称','信号','D1日期','D1最低(现)','vs预警线','收盘站回D0低','D1阳线','D1站回MA5','D1量比','D1涨幅%','D1收盘位置','K位置60日']
     D2_COLS = ['D0日期','代码','名称','信号','D1日期','D1涨幅%','D1收盘位置','D2涨幅%','D3涨幅%','D4涨幅%','D5涨幅%','确认后逐日','验证_后续大涨']
 
@@ -348,20 +328,8 @@ def to_html(out):
     # ③ 复盘: 最近10个D0日的确认信号
     recent_d0 = sorted(out['D0日期'].unique())[-10:]
     review = out[(out['D0日期'].isin(recent_d0)) & out['信号'].isin(CONFIRMED)].sort_values(['D0日期','信号'], ascending=[False, True])
-    # ⓪ 今日行动: 卖(D1=前一交易日,今天=卖出日) / 买(D1=今天) / 过期归档(D1<前一日且未确认)
-    _prev_td = None
-    for d in d1_dates:
-        if d < _today: _prev_td = d
-    act_sell = out[(out['D1日期'] == _prev_td) & out['信号'].isin(['顶格(52%档)','强确认(45%档)','确认(44%档)'])] if _prev_td else out.iloc[0:0]
-    _sig_order = {'顶格(52%档)':0,'强确认(45%档)':1,'确认(44%档)':2,'V反候选(54%档)':3,'部分确认,继续观察':4,'待确认(D1未到)':5}
-    act_buy = out[out['D1日期'] == _today].copy()
-    if len(act_buy):
-        act_buy['_o'] = act_buy['信号'].map(lambda s: _sig_order.get(s, 9))
-        act_buy = act_buy.sort_values(['_o','优先分'], ascending=[True, False])
-    act_stale = out[(out['D1日期'].notna()) & (out['D1日期'] < _today) & (out['D1日期'] != _prev_td)
-                    & (out['信号']=='部分确认,继续观察')].sort_values('D1日期', ascending=False)
     # 顶部汇总卡
-    conf2 = out[(out['状态']=='D1已走完') & out['信号'].isin(['顶格(52%档)','强确认(45%档)'])]
+    conf2 = out[(out['状态']=='D1已走完') & out['信号'].isin(['顶格(89%档)','强确认(86%档)'])]
     hit2 = conf2['验证_后续大涨'].str.contains('≥6%').mean() * 100 if len(conf2) else 0
     confA = out[out['信号'].isin(CONFIRMED)]
     hitA = confA['验证_后续大涨'].str.contains('≥6%').mean() * 100 if len(confA) else 0
@@ -372,28 +340,15 @@ def to_html(out):
                 '<div class="csub">%s</div></div>') % (color, color, num, label, sub)
 
     cards = ''.join([
-        card('%d' % len(watch), '明日盯盘(K低位入池)', '4★ %d 只 · 3★ %d 只' % (n4, n3), '#1a5276'),
-        card('%d' % len(sig_recent), '近两个确认日信号', '顶格%d/强确认%d/确认%d/V反%d' % (
-            (sig_recent['信号']=='顶格(52%档)').sum(), (sig_recent['信号']=='强确认(45%档)').sum(),
-            (sig_recent['信号']=='确认(44%档)').sum(), (sig_recent['信号']=='V反候选(54%档)').sum()), '#d35400'),
+        card('%d' % len(watch), '明日盯盘(急跌入池)', '4★ %d 只 · 3★ %d 只' % (n4, n3), '#1a5276'),
+        card('%d' % len(sig_recent), '近两个确认日信号', '顶格%d/强确认%d/确认%d/排雷%d' % (
+            (sig_recent['信号']=='顶格(89%档)').sum(), (sig_recent['信号']=='强确认(86%档)').sum(),
+            (sig_recent['信号']=='确认(74%档)').sum(), (sig_recent['信号']=='排雷回避(43%)').sum()), '#d35400'),
         card('%.0f%%' % hit2, '顶格+强确认 兑现率', '表内验证 n=%d' % len(conf2), '#c0392b'),
         card('%.0f%%' % hitA, '全部确认信号 兑现率', '表内验证 n=%d' % len(confA), '#b8860b'),
     ])
 
-    SELL_COLS = ['D0日期','代码','名称','信号','D1日期','D1收盘(买)','今日盈亏']
-    BUY_COLS = ['代码','名称','信号','D1最低(现)','vs预警线','收盘站回D0低','D1阳线','D1站回MA5','D1量比','D1涨幅%']
-    act_buy_conf = act_buy[act_buy['信号'] != '部分确认,继续观察'] if len(act_buy) else act_buy
-    act_buy_part = act_buy[act_buy['信号'] == '部分确认,继续观察'] if len(act_buy) else act_buy
-    act_sell_html = (_table(SELL_COLS, act_sell, '#fff8f0', live='sell') if len(act_sell)
-        else '<p style="color:#7f8c8d;">今天没有需要卖出的票（前一交易日无确认买入信号）</p>')
-    act_buy_html = (_table(BUY_COLS, act_buy_conf, '#f0faf4', live='d1') if len(act_buy_conf)
-        else '<p style="color:#7f8c8d;">今天暂无正在确认的票（或今天非交易日）</p>')
-    if len(act_buy_part):
-        act_buy_html += ('<details style="margin:4px 0;"><summary>部分确认 __NPART__ 只（差1~2项，临门的看这，展开查看，实时联动）</summary>%s</details>'
-            % _table(BUY_COLS, act_buy_part, '#fdfefe', live='d1'))
-    act_stale_html = (_table(['D0日期','D1日期','代码','名称','优先分','D0性质','信号'], act_stale, '#f8f9f9') if len(act_stale)
-        else '<p style="color:#7f8c8d;">无过期未确认票</p>')
-    html = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5"><title>涨停回踩·KDJ低位候选池·决策看板</title>
+    html = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5"><title>急跌候选池·决策看板</title>
 <style>
 body{font-family:-apple-system,'PingFang SC',sans-serif;margin:16px 20px;color:#2c3e50;font-size:13px;background:#f4f6f7;}
 h2{margin:6px 0 10px;} h3{margin:24px 0 8px;scroll-margin-top:calc(var(--hd,76px) + 8px);}
@@ -463,8 +418,9 @@ tr.brkrow{background:#fff2f0 !important;}
   .lq,.lv-low,.lv-vs{font-size:11px;}
 }
 </style></head><body>
-<h2>涨停回踩 · KDJ低位候选池（最初设想版） <small style="color:#7f8c8d;font-size:13px;">数据截止 __LAST__（__WK__）__LIVENOTE__</small></h2>
-<div class="cards">__CARDS__</div><div class="headbar" id="headbar">
+<h2>急跌候选池 · 决策看板 <small style="color:#7f8c8d;font-size:13px;">数据截止 __LAST__（__WK__）__LIVENOTE__</small></h2>
+<div class="cards">__CARDS__</div>
+<div class="headbar" id="headbar">
 <div class="livebar" id="livebar">
 <span class="dot" id="lvdot"></span>
 <b>实时行情</b>
@@ -478,41 +434,29 @@ tr.brkrow{background:#fff2f0 !important;}
 </div>
 <div class="nav">
 <b>导航:</b>
-<button class="zbtn hot on" id="zb0" onclick="zone('0',this)">⭐ 今日行动</button>
-<button class="zbtn" onclick="zone('all',this)">全部</button>
+<button class="zbtn on" onclick="zone('all',this)">全部</button>
 <button class="zbtn" onclick="zone('1',this)">① 明日盯盘</button>
-<button class="zbtn" onclick="zone('2',this)">② 今日信号</button>
+<button class="zbtn hot" onclick="zone('2',this)">② 今日信号 ★重点</button>
 <button class="zbtn" onclick="zone('3',this)">③ 复盘走势</button>
 <button class="zbtn" onclick="zone('4',this)">④ 说明书·胜率速查</button>
-<span class="tip">每天只看「今日行动」就够了</span>
+<span class="tip">点一下只看该区 · 「全部」看全貌</span>
 </div>
 </div>
 <div class="fbar">
 <b style="color:#7f8c8d;">筛选:</b>
 <button class="fbtn on" onclick="filt('all',this)">全部</button>
 <button class="fbtn" onclick="filt('star',this)">3★以上</button>
-<button class="fbtn" onclick="filt('顶格(52%档)',this)">顶格</button>
-<button class="fbtn" onclick="filt('强确认(45%档)',this)">强确认</button>
-<button class="fbtn" onclick="filt('确认(44%档)',this)">确认</button>
-<button class="fbtn" onclick="filt('V反',this)">V反</button>
+<button class="fbtn" onclick="filt('顶格(89%档)',this)">顶格</button>
+<button class="fbtn" onclick="filt('强确认(86%档)',this)">强确认</button>
+<button class="fbtn" onclick="filt('确认(74%档)',this)">确认</button>
+<button class="fbtn" onclick="filt('排雷',this)">排雷</button>
 <button class="fbtn" onclick="filt('px',this)">偏洗盘</button>
 <input id="q" placeholder="搜代码 / 名称…" oninput="apply()">
 <span id="cnt" style="color:#7f8c8d;"></span>
 </div>
 
-<section class="zone" data-z="0">
-<h3 id="sec0"><span class="sec" style="background:#c0392b;">⭐ 今日行动（__TODAY__ __TODAYWK__）—— 卖什么、买什么，就这一页</span></h3>
-<div class="note" style="margin:0 0 8px;">
-<b style="color:#c0392b;">▸ 卖出（__NSELL__ 只）</b>：前一交易日(__PREVTD__)尾盘买入的确认票 → <b>今日 10:30 前卖出</b>（回测 D2 10:30 卖最优 74.5%/+2.65%）。「今日盈亏」列实时跳动。<br>
-<b style="color:#1e8449;">▸ 买入（__NBUY__ 只）</b>：今天正在走确认的票 → <b>14:30 后核对四项，凑齐了 14:30~14:55 买入</b>。别怕"已经涨上去"：确认组里 D1 涨&gt;8% 的票次日均值 <b>+1.52%（全表最优）</b>，涨飞了照样可以追；未确认的就别追了。<br>
-<span style="color:#7f8c8d;">▸ 其余的都不用看：明天才轮到确认的在①区，过期没确认的已自动收进下方归档区。</span></div>
-__ACT_SELL__
-__ACT_BUY__
-<details style="margin-top:6px;"><summary>过期归档（__NSTALE__ 只 · 已过确认日仍未确认，自动收起不用看）</summary>__ACT_STALE__</details>
-</section>
-
 <section class="zone" data-z="1">
-<h3 id="sec1"><span class="sec" style="background:#1a5276;">① 明日盯盘 __LAST__ K低位入池 __NWATCH__ 只 → 重点前 __NTOP__</span></h3>
+<h3 id="sec1"><span class="sec" style="background:#1a5276;">① 明日盯盘 __LAST__ 急跌入池 __NWATCH__ 只 → 重点前 __NTOP__</span></h3>
 <div class="note" style="margin:0 0 8px;">
 <b>明日(D1)四项核对基准，盘中 14:30 逐项比对：</b>① <b>预警线=D0最低价</b>（收盘须在其上方，盘中碰破等拉回）② <b>收阳</b>（收盘&gt;开盘，只能盘中看）③ <b>收盘 &gt; 「明日MA5参考」</b>（该值=近4日收盘均价，明日收盘价站上它即站回MA5）④ <b>成交量 ≥ 「明日量比基准(手)」</b>（该值=近5日均量，达到即量比≥1）。四项全中=确认，再看「D1收盘位置」和「D0跌幅%」定档位。<br>
 <b>「D0性质」怎么用：</b><span class="chip up">● 偏洗盘</span>放量+涨停新鲜，次日确认率15.5%，<b>重点盯</b>；<span class="chip dn">▼ 偏出货</span>缩量无承接，确认率仅3.0%，<b>直接跳过</b>；中性正常走流程。「筛选→偏洗盘」可一键只看重点。详见④说明书。</div>
@@ -526,35 +470,29 @@ __SIG__
 </section>
 
 <section class="zone" data-z="3">
-<h3 id="sec3"><span class="sec" style="background:#7f8c8d;">③ 复盘：确认后逐日走势（最近10个入池日）—— D2~D5信息在这看</span></h3>
+<h3 id="sec3"><span class="sec" style="background:#7f8c8d;">③ 复盘：确认后逐日走势（最近10个急跌日）—— D2~D5信息在这看</span></h3>
 __REVIEW__
 </section>
 
 <section class="zone" data-z="4">
 <h3 id="sec4"><span class="sec" style="background:#5d6d7e;">④ 说明书 · 胜率速查 —— 怎么用、每档什么胜率，都在这</span></h3>
 <div class="note">
-<b>▎每天怎么用（打开看板 → 看「⭐ 今日行动」一页，2分钟）</b><br>
-<b>盘中任何时候打开</b>：默认停在「⭐ 今日行动」页——<b>红块=今天该卖的票</b>（前一日尾盘买的，10:30 前卖，盈亏实时跳）；<b>绿块=今天该买的票</b>（14:30 后看四项，凑齐了 14:30~14:55 买）。<br>
-<b>想要更多细节</b>再切①区（明天轮到确认的票）、②区（最近确认日全量）、③区（复盘）、④区（本说明书）。过期没确认的票自动收进归档区，<b>不用再管 12 号之类的老票</b>。<br>
-<b>▎信号档位胜率速查（D1尾盘买 → D2收盘卖，近一年全量回测 2026-11-17 重算）</b><br>
-<font color="#7f8c8d">⚠️ 口径说明：入池已改为最初设想（30日内涨停+K&lt;20），下方为本池真实档位，与旧急跌池的74/86/89.5%不可混用。本池确认后整体仍偏弱（-0.2%），<b>D0深跌是唯一转正加分项</b>。</font><br>
+<b>▎每天怎么用（3步，共约5分钟）</b><br>
+<b>收盘后</b>：跑 <code>python daily_tracker.py --update</code> 刷新看板（<b>盘中跑也安全</b>：实时半根K线只用于显示，不会污染历史数据，收盘后正式数据照常入库）→ 看导航<b>①区</b>今天急跌入池了哪些新票（登记即可，不用操作）。<br>
+<b>第二天盘中</b>：中午、14:30 各再跑一次 --update → 看<b>②区</b>「vs预警线」列盯破线（红底=盘中最低已触及D0最低，14:30后看收盘站不站得回来）。<br>
+<b>第二天14:30后</b>：核对四项定夺——①收盘站回D0最低价上方（上午碰破不要紧，尾盘还在线下=放弃）②收阳 ③站回MA5 ④量比≥1 → 通过则在 <b>13:00-14:55 买入，次日10:30前卖出</b>。<br>
+<b>▎信号档位胜率速查（10日内大涨≥6%）</b><br>
 <table style="margin:6px 0;">
-<thead><tr><th>档位</th><th>定义</th><th>胜率</th><th>均值</th><th>动作</th></tr></thead>
+<thead><tr><th>档位</th><th>定义</th><th>胜率</th><th>动作</th></tr></thead>
 <tbody>
-<tr><td>V反候选(54%档)</td><td>D1放量阴线(量比≥1.3) + 未站回D0最低（恐慌盘被打出）</td><td style="color:#c0392b;font-weight:700;">54.3%</td><td>+0.26%</td><td>反直觉关注</td></tr>
-<tr><td>顶格(52%档)</td><td>四项全中 + 收上沿&gt;0.75 + D0跌幅≤-4%</td><td style="color:#c0392b;font-weight:700;">52.0%</td><td>+0.25%</td><td>重点买入</td></tr>
-<tr><td>强确认(45%档)</td><td>四项全中 + 收上沿&gt;0.75</td><td>44.6%</td><td>-0.10%</td><td>轻仓</td></tr>
-<tr><td>确认(44%档)</td><td>四项全中</td><td>44.2%</td><td>-0.20%</td><td>观望</td></tr>
-<tr><td>部分确认</td><td>四项没凑齐</td><td>—</td><td>—</td><td>留池观察，哪天凑齐算哪天</td></tr>
+<tr><td>顶格(89%档)</td><td>四项全中 + 收上沿&gt;0.75 + 深急跌≤-6%</td><td style="color:#c0392b;font-weight:700;">89.5%</td><td>重点买入</td></tr>
+<tr><td>强确认(86%档)</td><td>四项全中 + 收上沿&gt;0.75</td><td style="color:#d35400;font-weight:700;">86.0%</td><td>买入</td></tr>
+<tr><td>确认(74%档)</td><td>四项全中</td><td style="color:#b8860b;font-weight:700;">74.1%</td><td>轻仓或观望</td></tr>
+<tr><td>排雷(43%)</td><td>确认但D1涨幅&lt;2%（温和反抽）</td><td style="color:#7f8c8d;">43.0%</td><td>回避</td></tr>
+<tr><td>部分确认</td><td>四项没凑齐</td><td>—</td><td>留池观察，哪天凑齐算哪天</td></tr>
 </tbody></table>
-<b>▎为什么换池后档位降了？（必须知道的实话）</b>旧急跌池的74/86/89.5%是在"急跌≥4%+涨停10日内+盘中10:30卖"口径下测的。最初设想的K&lt;20池更宽（日均157只 vs 急跌池约150只但结构不同），<b>超卖本身不构成买点</b>——数据里唯一稳定的正期望交集是"D0当天还发生了≥4%深跌"（即两个体系的重合部分，49.4%/+0.03%；配合四项+收上沿到52%）。所以：优先分里D0深跌权重最高，K&lt;20但D0横盘的票只当观察名单。<br>
-<b>▎「回调到位」怎么判？（全历史 n=26843 回测，四维全部验证过）</b><br>
-<b>结论先说：到位不是"算"出来的，是"打"出来的。</b>跌幅多深、跌了几天、缩量多少、踩没踩黄金分割位——这些位置类指标<b>全都没有判别力</b>，别拿它们抄底。<br>
-<b>✓ 有效信号（唯一强项：当天的收盘行为）</b>：<span class="chip up">D0收盘位置&gt;0.6</span>（收在全天上沿=跌幅被买盘接回去）→ 后续5日守住D0低点概率 <b>41.7%</b>（光脚阴仅19.6%）、D1买D2卖均值 <b>+0.20%</b>（全表唯一转正）。反之收盘在下沿25%以下（光脚长阴）＝没人接，守住概率19.6%。<br>
-<b>✗ 无效信号（实测无优势，别用）</b>：①回撤深度——回撤30~45%的10日大涨率57.4%但守低点只有18.8%，深跌票弹性大但底不稳；②斐波那契回吐50~62%黄金位——47.7%，与基线46.4%几乎一样；③缩量到位——地量（量&lt;涨停日30%）10日大涨率仅 <b>39.1%，最差</b>，缩量=没人要，不是筹码稳定；④时间——5~7天略优但差异不大。<br>
-<b>→ 实操三步</b>：①D0收盘看「D0收盘位置」是否收上沿（有承接）；②D1盘中看②区「vs预警线」是否始终在0上方（低点不破=底成立）；③<b>14:30后</b>看四项是否凑齐（这才是"到位"的操作化定义，13:30 时点判断只有82%最终成立，14:00 达89.7%，上午不算数）。<br>
 <b>▎有效期提醒</b>：涨停基因的加成集中在<b>涨停后10个交易日内</b>（10日窗口大涨率48.6% vs 无涨停23.5%），「涨停距今天数」&gt;10 的票自动失效。<br>
-<b>▎「D0性质」—— 回踩当天抛压是洗盘还是出货？（急跌池 n=26608 回测；K&lt;20 新池内方向一致：缩量&lt;0.7 确认组胜率 42.1% 仍最差，放量&gt;1.2 略优 45.5%）</b><br>
+<b>▎「D0性质」—— 今天这根急跌是洗盘还是出货？（全历史 n=26608 回测）</b><br>
 <span class="chip up">● 偏洗盘</span> = <b>放量急跌(量比≥1.2) + 涨停1~2天内</b>：下跌有承接、分歧换手充分，次日反抽概率最高，<b>确认率 15.5%</b>（基线7.3%的2倍+），优先盯。<br>
 <span class="chip dn">▼ 偏出货</span> = <b>缩量阴跌(量比&lt;0.7)</b>：没有资金接、阴跌磨人，次日确认率仅 <b>3.0%</b>；其中缩量+涨停1~2天的最坑，确认后次日卖出均值 <b>-2.29%</b>（全表最差），直接跳过、别浪费精力。<br>
 <span class="chip flat">中性</span> = 其余组合，按四项确认正常流程走。<br>
@@ -575,14 +513,13 @@ function filt(s,btn){cur=s;document.querySelectorAll('.fbtn').forEach(function(b
 function apply(){
   var q=document.getElementById('q').value.trim().toUpperCase();var n=0;
   document.querySelectorAll('tbody tr[data-star]').forEach(function(tr){
-    var ok=(cur=='all')||(cur=='star'?+tr.dataset.star>=3:(cur=='V反'?tr.dataset.sig.indexOf('V反')>=0:(cur=='px'?tr.dataset.px==='偏洗盘':tr.dataset.sig===cur)));
+    var ok=(cur=='all')||(cur=='star'?+tr.dataset.star>=3:(cur=='排雷'?tr.dataset.sig.indexOf('排雷')>=0:(cur=='px'?tr.dataset.px==='偏洗盘':tr.dataset.sig===cur)));
     if(ok&&q)ok=tr.textContent.toUpperCase().indexOf(q)>=0;
     tr.style.display=ok?'':'none';if(ok)n++;
   });
   document.getElementById('cnt').textContent='显示 '+n+' 行';
 }
 apply();
-zone('0',document.getElementById('zb0'));
 
 /* ================= 吸附头高度动态测量（防错位） ================= */
 function hdFix(){
@@ -627,18 +564,12 @@ function lvApply(){
     okSet[code]=1;
     var col = pct>0.001?'#c0392b':(pct<-0.001?'#1e8449':'#566573');
     var sign = pct>0.001?'+':'';
-    var buy=parseFloat(tr.dataset.buy||'');
-    if(isFinite(buy)&&buy>0){
-      var pnl=tr.querySelector('.lv-pnl');
-      if(pnl){var g=(price/buy-1)*100;
-        pnl.innerHTML='<b style="color:'+(g>0.001?'#c0392b':(g<-0.001?'#1e8449':'#566573'))+';">'+(g>0.001?'+':'')+g.toFixed(2)+'%</b>';}
-    }
     var d0=parseFloat(tr.dataset.d0low||'');
     var d1d=tr.dataset.d1date||'';
     var lq=tr.querySelector('.lq');
     if(lq){
       var html='<b style="color:'+col+';">'+price.toFixed(2)+'</b> <span style="font-size:11px;color:'+col+';">'+sign+pct.toFixed(2)+'%</span>';
-      if(!d1d&&!tr.dataset.buy&&isFinite(d0)&&d0>0&&price<d0){html+=' <span class="brk">破线</span>';b1++;}
+      if(!d1d&&isFinite(d0)&&d0>0&&price<d0){html+=' <span class="brk">破线</span>';b1++;}
       lq.innerHTML=html;lq.style.color='';
     }
     if(isFinite(d0)&&d0>0&&isFinite(low)&&low>0&&(!d1d||d1d===tdy)){
@@ -691,11 +622,6 @@ setTimeout(lvRefresh,600);
 </script>
 </body></html>""" \
         .replace('__LAST__', last).replace('__WK__', _wk(last)).replace('__LIVENOTE__', _live_note) \
-        .replace('__TODAY__', _today).replace('__TODAYWK__', _wk(_today) if _today==last else '') \
-        .replace('__PREVTD__', _prev_td or '-') \
-        .replace('__NSELL__', str(len(act_sell))).replace('__NBUY__', str(len(act_buy))).replace('__NSTALE__', str(len(act_stale))) \
-        .replace('__ACT_SELL__', act_sell_html).replace('__ACT_BUY__', act_buy_html).replace('__ACT_STALE__', act_stale_html) \
-        .replace('__NPART__', str(len(act_buy_part))) \
         .replace('__CARDS__', cards) \
         .replace('__NWATCH__', str(len(watch))).replace('__NTOP__', str(len(watch_top))) \
         .replace('__WATCH_REST__', _table(D0_COLS, watch.iloc[30:], '#fdfefe', live='price') if len(watch)>30 else '') \

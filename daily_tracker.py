@@ -167,11 +167,17 @@ def build(days=20):
     pool = pool.merge(names, on='code', how='left')
     pool['优先分'] = ((pool['chg'] <= -0.06).astype(int) + (pool['chg'] <= -0.08).astype(int)
         + (pool['lu_ago'] <= 5).astype(int) + (pool['K'] > 75).astype(int))
+    # D0性质判别(全历史n=26608回测): 放量急跌+涨停新鲜=有承接(确认率15.5%), 缩量阴跌=无承接(确认率3.0%)
+    pool['D0性质'] = np.select(
+        [(pool['vrat'] >= 1.2) & (pool['lu_ago'] <= 2),
+         (pool['vrat'] < 0.7)],
+        ['偏洗盘', '偏出货'], default='中性')
     out = pd.DataFrame({
         'D0日期': pool['date'], '代码': pool['code'], '名称': pool['name'],
         '优先分': pool['优先分'],
         'D0收盘': pool['close'].round(2), 'D0最低价': pool['low'].round(2), 'D0跌幅%': (pool['chg']*100).round(1),
         '涨停距今天数': pool['lu_ago'].astype(int), 'D0量比': pool['vrat'].round(2),
+        'D0性质': pool['D0性质'],
         '明日MA5参考': pool['ma4_d0'].round(2), '明日量比基准(手)': pool['vol_base'].round(0),
         '连跌天数': pool['dn_run'].astype(int), 'D0_K值': pool['K'].round(0),
         '状态': pool['状态'], '信号': pool['信号'],
@@ -239,6 +245,14 @@ def _row(r, cols, live=False):
             tds.append('<td style="%s"><b style="color:%s;">%s</b></td>' % (style, _sig_color(v), v))
         elif col == '优先分':
             tds.append('<td style="%s"><b style="color:#c0392b;">%d★</b></td>' % (style, v))
+        elif col == 'D0性质':
+            m = {'偏洗盘': ('#1e8449', '#eafaf1', '● 偏洗盘'),
+                 '偏出货': ('#c0392b', '#fdedec', '▼ 偏出货')}
+            if v in m:
+                c, bgc, txt = m[v]
+                tds.append('<td class="d0px" style="%s"><span style="color:%s;background:%s;border-radius:3px;padding:1px 5px;font-weight:700;font-size:11px;">%s</span></td>' % (style, c, bgc, txt))
+            else:
+                tds.append('<td class="d0px" style="%s"><span style="color:#7f8c8d;font-size:11px;">中性</span></td>' % style)
         elif col == 'D0最低价':
             tds.append('<td style="%s"><b style="color:#c0392b;">%s</b></td>' % (style, v))
         elif col == 'D1最低(现)':
@@ -285,7 +299,8 @@ def _row(r, cols, live=False):
             d1d = str(r['D1日期']).replace('-', '') if pd.notna(r.get('D1日期')) else ''
             attrs += ' data-d1date="%s"' % d1d
         attrs += ' data-name="%s"' % str(r['名称']).replace('"', '')
-    return '<tr data-star="%d" data-sig="%s"%s%s>%s</tr>' % (star, sig, attrs, (' style="%s"' % bg if bg else ''), ''.join(tds))
+    pxv = str(r['D0性质']) if 'D0性质' in r.index else ''
+    return '<tr data-star="%d" data-sig="%s" data-px="%s"%s%s>%s</tr>' % (star, sig, pxv, attrs, (' style="%s"' % bg if bg else ''), ''.join(tds))
 
 def _table(cols, rows_df, bg='#fff', live=False):
     thead = ''.join('<th>%s</th>' % c for c in cols)
@@ -295,7 +310,7 @@ def _table(cols, rows_df, bg='#fff', live=False):
     return '<div class="tw"><table style="background:%s;"><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (bg, thead, trs)
 
 def to_html(out):
-    D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0_K值','明日MA5参考','明日量比基准(手)','信号']
+    D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0性质','D0_K值','明日MA5参考','明日量比基准(手)','信号']
     D1_COLS = ['D0日期','代码','名称','信号','D1日期','D1最低(现)','vs预警线','收盘站回D0低','D1阳线','D1站回MA5','D1量比','D1涨幅%','D1收盘位置','K位置60日']
     D2_COLS = ['D0日期','代码','名称','信号','D1日期','D1涨幅%','D1收盘位置','D2涨幅%','D3涨幅%','D4涨幅%','D5涨幅%','确认后逐日','验证_后续大涨']
 
@@ -435,6 +450,7 @@ tr.brkrow{background:#fff2f0 !important;}
 <button class="fbtn" onclick="filt('强确认(86%档)',this)">强确认</button>
 <button class="fbtn" onclick="filt('确认(74%档)',this)">确认</button>
 <button class="fbtn" onclick="filt('排雷',this)">排雷</button>
+<button class="fbtn" onclick="filt('px',this)">偏洗盘</button>
 <input id="q" placeholder="搜代码 / 名称…" oninput="apply()">
 <span id="cnt" style="color:#7f8c8d;"></span>
 </div>
@@ -442,8 +458,8 @@ tr.brkrow{background:#fff2f0 !important;}
 <section class="zone" data-z="1">
 <h3 id="sec1"><span class="sec" style="background:#1a5276;">① 明日盯盘 __LAST__ 急跌入池 __NWATCH__ 只 → 重点前 __NTOP__</span></h3>
 <div class="note" style="margin:0 0 8px;">
-<b>明日(D1)四项核对基准，盘中 14:30 逐项比对：</b>① <b>预警线=D0最低价</b>（收盘须在其上方，盘中碰破等拉回）② <b>收阳</b>（收盘&gt;开盘，只能盘中看）③ <b>收盘 &gt; 「明日MA5参考」</b>（该值=近4日收盘均价，明日收盘价站上它即站回MA5）④ <b>成交量 ≥ 「明日量比基准(手)」</b>（该值=近5日均量，达到即量比≥1）。四项全中=确认，再看「D1收盘位置」和「D0跌幅%」定档位。
-</div>
+<b>明日(D1)四项核对基准，盘中 14:30 逐项比对：</b>① <b>预警线=D0最低价</b>（收盘须在其上方，盘中碰破等拉回）② <b>收阳</b>（收盘&gt;开盘，只能盘中看）③ <b>收盘 &gt; 「明日MA5参考」</b>（该值=近4日收盘均价，明日收盘价站上它即站回MA5）④ <b>成交量 ≥ 「明日量比基准(手)」</b>（该值=近5日均量，达到即量比≥1）。四项全中=确认，再看「D1收盘位置」和「D0跌幅%」定档位。<br>
+<b>「D0性质」怎么用：</b><span class="chip up">● 偏洗盘</span>放量+涨停新鲜，次日确认率15.5%，<b>重点盯</b>；<span class="chip dn">▼ 偏出货</span>缩量无承接，确认率仅3.0%，<b>直接跳过</b>；中性正常走流程。「筛选→偏洗盘」可一键只看重点。详见④说明书。</div>
 __WATCH__
 <details><summary>其余 __NREST__ 只（按优先分已排好，展开查看）</summary>__WATCH_REST__</details>
 </section>
@@ -476,6 +492,11 @@ __REVIEW__
 <tr><td>部分确认</td><td>四项没凑齐</td><td>—</td><td>留池观察，哪天凑齐算哪天</td></tr>
 </tbody></table>
 <b>▎有效期提醒</b>：涨停基因的加成集中在<b>涨停后10个交易日内</b>（10日窗口大涨率48.6% vs 无涨停23.5%），「涨停距今天数」&gt;10 的票自动失效。<br>
+<b>▎「D0性质」—— 今天这根急跌是洗盘还是出货？（全历史 n=26608 回测）</b><br>
+<span class="chip up">● 偏洗盘</span> = <b>放量急跌(量比≥1.2) + 涨停1~2天内</b>：下跌有承接、分歧换手充分，次日反抽概率最高，<b>确认率 15.5%</b>（基线7.3%的2倍+），优先盯。<br>
+<span class="chip dn">▼ 偏出货</span> = <b>缩量阴跌(量比&lt;0.7)</b>：没有资金接、阴跌磨人，次日确认率仅 <b>3.0%</b>；其中缩量+涨停1~2天的最坑，确认后次日卖出均值 <b>-2.29%</b>（全表最差），直接跳过、别浪费精力。<br>
+<span class="chip flat">中性</span> = 其余组合，按四项确认正常流程走。<br>
+<font color="#7f8c8d">⚠️ 反直觉提醒：教科书说"缩量回调是洗盘"，在这套体系里<b>恰恰相反</b>——缩量急跌+涨停1~2天内的票，次日卖出均值 <b>-2.29%</b> 是全表最差（缩量=没人接盘，不是筹码稳定）；真正的好信号是<b>放量+涨停新鲜</b>。注意：偏洗盘≠能买，D0当天仍然禁止买入（负期望），它只决定"明天值不值得重点盯"。</font><br>
 <b>▎「K位置60日」（②区）</b>：D0收盘处在最近60日高低区间的百分位。全历史验证：<b>胜率对位置不敏感</b>（确认组低位71.7% ~ 顶部75.6%，高位前半场78.0%/后半场73.3%）——但<b>风险不对称</b>：位置&gt;85%的高位票万一失败，10日内最大回撤中位 <b style="color:#c0392b;">-14.9%</b>（非高位仅-8.7%）。<b>高位票可参与但减半仓，破D1最低价立刻离场</b>。
 <b>▎「确认后逐日」</b>（③区）：D1~D5每天涨幅色块 <span class="chip big">≥6%</span><span class="chip up">涨</span><span class="chip dn">跌</span><span class="chip na">未走</span>，一眼看出确认后哪天涨的。
 </div>
@@ -492,7 +513,7 @@ function filt(s,btn){cur=s;document.querySelectorAll('.fbtn').forEach(function(b
 function apply(){
   var q=document.getElementById('q').value.trim().toUpperCase();var n=0;
   document.querySelectorAll('tbody tr[data-star]').forEach(function(tr){
-    var ok=(cur=='all')||(cur=='star'?+tr.dataset.star>=3:(cur=='排雷'?tr.dataset.sig.indexOf('排雷')>=0:tr.dataset.sig===cur));
+    var ok=(cur=='all')||(cur=='star'?+tr.dataset.star>=3:(cur=='排雷'?tr.dataset.sig.indexOf('排雷')>=0:(cur=='px'?tr.dataset.px==='偏洗盘':tr.dataset.sig===cur)));
     if(ok&&q)ok=tr.textContent.toUpperCase().indexOf(q)>=0;
     tr.style.display=ok?'':'none';if(ok)n++;
   });

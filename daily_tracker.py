@@ -182,6 +182,7 @@ def build(days=20):
         '连跌天数': pool['dn_run'].astype(int), 'D0_K值': pool['K'].round(0),
         '状态': pool['状态'], '信号': pool['信号'],
         'D1日期': pool['d1_date'], 'D1最低(现)': pool['d1_low'].round(2), 'vs预警线': vs_jl,
+        'D1收盘(买)': pool['d1_close'].round(2),
         '收盘站回D0低': np.where(d1_exist, np.where(nnl,'√','×'), ''),
         'D1阳线': np.where(d1_exist, np.where(yang,'√','×'), ''),
         'D1站回MA5': np.where(d1_exist, np.where(above,'√','×'), ''),
@@ -239,7 +240,7 @@ def _path_chips(r):
 def _row(r, cols, live=False):
     tds = []
     for col in cols:
-        v = None if col == '确认后逐日' else r[col]
+        v = None if col in ('确认后逐日', '今日盈亏') else r[col]
         style = 'padding:3px 7px;white-space:nowrap;'
         if col == '信号':
             tds.append('<td style="%s"><b style="color:%s;">%s</b></td>' % (style, _sig_color(v), v))
@@ -266,6 +267,10 @@ def _row(r, cols, live=False):
             tds.append('<td style="%s"><b style="color:#c0392b;">%s</b></td>' % (style, v))
         elif col == 'D1最低(现)':
             tds.append('<td class="lv-low" style="%s">%s</td>' % (style, v if pd.notna(v) else '·'))
+        elif col == 'D1收盘(买)':
+            tds.append('<td style="%s"><b>%s</b></td>' % (style, v if pd.notna(v) else '·'))
+        elif col == '今日盈亏':
+            tds.append('<td class="lv-pnl" style="%s;color:#95a5a6;">…</td>' % style)
         elif col == 'vs预警线':
             if pd.isna(v):
                 tds.append('<td class="lv-vs" style="%s"><span style="color:#bdc3c7;">–</span></td>' % style)
@@ -307,6 +312,10 @@ def _row(r, cols, live=False):
         if live == 'd1':
             d1d = str(r['D1日期']).replace('-', '') if pd.notna(r.get('D1日期')) else ''
             attrs += ' data-d1date="%s"' % d1d
+        if live == 'sell':
+            b = r.get('D1收盘(买)')
+            if pd.notna(b):
+                attrs += ' data-buy="%.2f"' % b
         attrs += ' data-name="%s"' % str(r['名称']).replace('"', '')
     pxv = str(r['D0性质']) if 'D0性质' in r.index else ''
     return '<tr data-star="%d" data-sig="%s" data-px="%s"%s%s>%s</tr>' % (star, sig, pxv, attrs, (' style="%s"' % bg if bg else ''), ''.join(tds))
@@ -337,6 +346,18 @@ def to_html(out):
     # ③ 复盘: 最近10个D0日的确认信号
     recent_d0 = sorted(out['D0日期'].unique())[-10:]
     review = out[(out['D0日期'].isin(recent_d0)) & out['信号'].isin(CONFIRMED)].sort_values(['D0日期','信号'], ascending=[False, True])
+    # ⓪ 今日行动: 卖(D1=前一交易日,今天=卖出日) / 买(D1=今天) / 过期归档(D1<前一日且未确认)
+    _prev_td = None
+    for d in d1_dates:
+        if d < _today: _prev_td = d
+    act_sell = out[(out['D1日期'] == _prev_td) & out['信号'].isin(['顶格(89%档)','强确认(86%档)','确认(74%档)'])] if _prev_td else out.iloc[0:0]
+    _sig_order = {'顶格(89%档)':0,'强确认(86%档)':1,'确认(74%档)':2,'排雷回避(43%)':3,'部分确认,继续观察':4,'待确认(D1未到)':5}
+    act_buy = out[out['D1日期'] == _today].copy()
+    if len(act_buy):
+        act_buy['_o'] = act_buy['信号'].map(lambda s: _sig_order.get(s, 9))
+        act_buy = act_buy.sort_values(['_o','优先分'], ascending=[True, False])
+    act_stale = out[(out['D1日期'].notna()) & (out['D1日期'] < _today) & (out['D1日期'] != _prev_td)
+                    & (out['信号']=='部分确认,继续观察')].sort_values('D1日期', ascending=False)
     # 顶部汇总卡
     conf2 = out[(out['状态']=='D1已走完') & out['信号'].isin(['顶格(89%档)','强确认(86%档)'])]
     hit2 = conf2['验证_后续大涨'].str.contains('≥6%').mean() * 100 if len(conf2) else 0
@@ -357,6 +378,19 @@ def to_html(out):
         card('%.0f%%' % hitA, '全部确认信号 兑现率', '表内验证 n=%d' % len(confA), '#b8860b'),
     ])
 
+    SELL_COLS = ['D0日期','代码','名称','信号','D1日期','D1收盘(买)','今日盈亏']
+    BUY_COLS = ['代码','名称','信号','D1最低(现)','vs预警线','收盘站回D0低','D1阳线','D1站回MA5','D1量比','D1涨幅%']
+    act_buy_conf = act_buy[act_buy['信号'] != '部分确认,继续观察'] if len(act_buy) else act_buy
+    act_buy_part = act_buy[act_buy['信号'] == '部分确认,继续观察'] if len(act_buy) else act_buy
+    act_sell_html = (_table(SELL_COLS, act_sell, '#fff8f0', live='sell') if len(act_sell)
+        else '<p style="color:#7f8c8d;">今天没有需要卖出的票（前一交易日无确认买入信号）</p>')
+    act_buy_html = (_table(BUY_COLS, act_buy_conf, '#f0faf4', live='d1') if len(act_buy_conf)
+        else '<p style="color:#7f8c8d;">今天暂无正在确认的票（或今天非交易日）</p>')
+    if len(act_buy_part):
+        act_buy_html += ('<details style="margin:4px 0;"><summary>部分确认 __NPART__ 只（差1~2项，临门的看这，展开查看，实时联动）</summary>%s</details>'
+            % _table(BUY_COLS, act_buy_part, '#fdfefe', live='d1'))
+    act_stale_html = (_table(['D0日期','D1日期','代码','名称','优先分','D0性质','信号'], act_stale, '#f8f9f9') if len(act_stale)
+        else '<p style="color:#7f8c8d;">无过期未确认票</p>')
     html = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5"><title>急跌候选池·决策看板</title>
 <style>
 body{font-family:-apple-system,'PingFang SC',sans-serif;margin:16px 20px;color:#2c3e50;font-size:13px;background:#f4f6f7;}
@@ -428,8 +462,7 @@ tr.brkrow{background:#fff2f0 !important;}
 }
 </style></head><body>
 <h2>急跌候选池 · 决策看板 <small style="color:#7f8c8d;font-size:13px;">数据截止 __LAST__（__WK__）__LIVENOTE__</small></h2>
-<div class="cards">__CARDS__</div>
-<div class="headbar" id="headbar">
+<div class="cards">__CARDS__</div><div class="headbar" id="headbar">
 <div class="livebar" id="livebar">
 <span class="dot" id="lvdot"></span>
 <b>实时行情</b>
@@ -443,12 +476,13 @@ tr.brkrow{background:#fff2f0 !important;}
 </div>
 <div class="nav">
 <b>导航:</b>
-<button class="zbtn on" onclick="zone('all',this)">全部</button>
+<button class="zbtn hot on" id="zb0" onclick="zone('0',this)">⭐ 今日行动</button>
+<button class="zbtn" onclick="zone('all',this)">全部</button>
 <button class="zbtn" onclick="zone('1',this)">① 明日盯盘</button>
-<button class="zbtn hot" onclick="zone('2',this)">② 今日信号 ★重点</button>
+<button class="zbtn" onclick="zone('2',this)">② 今日信号</button>
 <button class="zbtn" onclick="zone('3',this)">③ 复盘走势</button>
 <button class="zbtn" onclick="zone('4',this)">④ 说明书·胜率速查</button>
-<span class="tip">点一下只看该区 · 「全部」看全貌</span>
+<span class="tip">每天只看「今日行动」就够了</span>
 </div>
 </div>
 <div class="fbar">
@@ -463,6 +497,17 @@ tr.brkrow{background:#fff2f0 !important;}
 <input id="q" placeholder="搜代码 / 名称…" oninput="apply()">
 <span id="cnt" style="color:#7f8c8d;"></span>
 </div>
+
+<section class="zone" data-z="0">
+<h3 id="sec0"><span class="sec" style="background:#c0392b;">⭐ 今日行动（__TODAY__ __TODAYWK__）—— 卖什么、买什么，就这一页</span></h3>
+<div class="note" style="margin:0 0 8px;">
+<b style="color:#c0392b;">▸ 卖出（__NSELL__ 只）</b>：前一交易日(__PREVTD__)尾盘买入的确认票 → <b>今日 10:30 前卖出</b>（回测 D2 10:30 卖最优 74.5%/+2.65%）。「今日盈亏」列实时跳动。<br>
+<b style="color:#1e8449;">▸ 买入（__NBUY__ 只）</b>：今天正在走确认的票 → <b>14:30 后核对四项，凑齐了 14:30~14:55 买入</b>。别怕"已经涨上去"：确认组里 D1 涨&gt;8% 的票次日均值 <b>+1.52%（全表最优）</b>，涨飞了照样可以追；未确认的就别追了。<br>
+<span style="color:#7f8c8d;">▸ 其余的都不用看：明天才轮到确认的在①区，过期没确认的已自动收进下方归档区。</span></div>
+__ACT_SELL__
+__ACT_BUY__
+<details style="margin-top:6px;"><summary>过期归档（__NSTALE__ 只 · 已过确认日仍未确认，自动收起不用看）</summary>__ACT_STALE__</details>
+</section>
 
 <section class="zone" data-z="1">
 <h3 id="sec1"><span class="sec" style="background:#1a5276;">① 明日盯盘 __LAST__ 急跌入池 __NWATCH__ 只 → 重点前 __NTOP__</span></h3>
@@ -486,10 +531,9 @@ __REVIEW__
 <section class="zone" data-z="4">
 <h3 id="sec4"><span class="sec" style="background:#5d6d7e;">④ 说明书 · 胜率速查 —— 怎么用、每档什么胜率，都在这</span></h3>
 <div class="note">
-<b>▎每天怎么用（3步，共约5分钟）</b><br>
-<b>收盘后</b>：跑 <code>python daily_tracker.py --update</code> 刷新看板（<b>盘中跑也安全</b>：实时半根K线只用于显示，不会污染历史数据，收盘后正式数据照常入库）→ 看导航<b>①区</b>今天急跌入池了哪些新票（登记即可，不用操作）。<br>
-<b>第二天盘中</b>：中午、14:30 各再跑一次 --update → 看<b>②区</b>「vs预警线」列盯破线（红底=盘中最低已触及D0最低，14:30后看收盘站不站得回来）。<br>
-<b>第二天14:30后</b>：核对四项定夺——①收盘站回D0最低价上方（上午碰破不要紧，尾盘还在线下=放弃）②收阳 ③站回MA5 ④量比≥1 → 通过则在 <b>13:00-14:55 买入，次日10:30前卖出</b>。<br>
+<b>▎每天怎么用（打开看板 → 看「⭐ 今日行动」一页，2分钟）</b><br>
+<b>盘中任何时候打开</b>：默认停在「⭐ 今日行动」页——<b>红块=今天该卖的票</b>（前一日尾盘买的，10:30 前卖，盈亏实时跳）；<b>绿块=今天该买的票</b>（14:30 后看四项，凑齐了 14:30~14:55 买）。<br>
+<b>想要更多细节</b>再切①区（明天轮到确认的票）、②区（最近确认日全量）、③区（复盘）、④区（本说明书）。过期没确认的票自动收进归档区，<b>不用再管 12 号之类的老票</b>。<br>
 <b>▎信号档位胜率速查（10日内大涨≥6%）</b><br>
 <table style="margin:6px 0;">
 <thead><tr><th>档位</th><th>定义</th><th>胜率</th><th>动作</th></tr></thead>
@@ -534,6 +578,7 @@ function apply(){
   document.getElementById('cnt').textContent='显示 '+n+' 行';
 }
 apply();
+zone('0',document.getElementById('zb0'));
 
 /* ================= 吸附头高度动态测量（防错位） ================= */
 function hdFix(){
@@ -578,12 +623,18 @@ function lvApply(){
     okSet[code]=1;
     var col = pct>0.001?'#c0392b':(pct<-0.001?'#1e8449':'#566573');
     var sign = pct>0.001?'+':'';
+    var buy=parseFloat(tr.dataset.buy||'');
+    if(isFinite(buy)&&buy>0){
+      var pnl=tr.querySelector('.lv-pnl');
+      if(pnl){var g=(price/buy-1)*100;
+        pnl.innerHTML='<b style="color:'+(g>0.001?'#c0392b':(g<-0.001?'#1e8449':'#566573'))+';">'+(g>0.001?'+':'')+g.toFixed(2)+'%</b>';}
+    }
     var d0=parseFloat(tr.dataset.d0low||'');
     var d1d=tr.dataset.d1date||'';
     var lq=tr.querySelector('.lq');
     if(lq){
       var html='<b style="color:'+col+';">'+price.toFixed(2)+'</b> <span style="font-size:11px;color:'+col+';">'+sign+pct.toFixed(2)+'%</span>';
-      if(!d1d&&isFinite(d0)&&d0>0&&price<d0){html+=' <span class="brk">破线</span>';b1++;}
+      if(!d1d&&!tr.dataset.buy&&isFinite(d0)&&d0>0&&price<d0){html+=' <span class="brk">破线</span>';b1++;}
       lq.innerHTML=html;lq.style.color='';
     }
     if(isFinite(d0)&&d0>0&&isFinite(low)&&low>0&&(!d1d||d1d===tdy)){
@@ -636,6 +687,11 @@ setTimeout(lvRefresh,600);
 </script>
 </body></html>""" \
         .replace('__LAST__', last).replace('__WK__', _wk(last)).replace('__LIVENOTE__', _live_note) \
+        .replace('__TODAY__', _today).replace('__TODAYWK__', _wk(_today) if _today==last else '') \
+        .replace('__PREVTD__', _prev_td or '-') \
+        .replace('__NSELL__', str(len(act_sell))).replace('__NBUY__', str(len(act_buy))).replace('__NSTALE__', str(len(act_stale))) \
+        .replace('__ACT_SELL__', act_sell_html).replace('__ACT_BUY__', act_buy_html).replace('__ACT_STALE__', act_stale_html) \
+        .replace('__NPART__', str(len(act_buy_part))) \
         .replace('__CARDS__', cards) \
         .replace('__NWATCH__', str(len(watch))).replace('__NTOP__', str(len(watch_top))) \
         .replace('__WATCH_REST__', _table(D0_COLS, watch.iloc[30:], '#fdfefe', live='price') if len(watch)>30 else '') \

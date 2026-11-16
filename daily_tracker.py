@@ -230,7 +230,7 @@ def _path_chips(r):
             chips.append('<span class="chip flat">D%d 0.0</span>' % k)
     return ''.join(chips)
 
-def _row(r, cols):
+def _row(r, cols, live=False):
     tds = []
     for col in cols:
         v = None if col == '确认后逐日' else r[col]
@@ -242,14 +242,14 @@ def _row(r, cols):
         elif col == 'D0最低价':
             tds.append('<td style="%s"><b style="color:#c0392b;">%s</b></td>' % (style, v))
         elif col == 'D1最低(现)':
-            tds.append('<td style="%s">%s</td>' % (style, v if pd.notna(v) else '·'))
+            tds.append('<td class="lv-low" style="%s">%s</td>' % (style, v if pd.notna(v) else '·'))
         elif col == 'vs预警线':
             if pd.isna(v):
-                tds.append('<td style="%s"><span style="color:#bdc3c7;">–</span></td>' % style)
+                tds.append('<td class="lv-vs" style="%s"><span style="color:#bdc3c7;">–</span></td>' % style)
             elif v <= 0:
-                tds.append('<td style="%s;background:#fdedec;"><b style="color:#c0392b;">破线</b></td>' % style)
+                tds.append('<td class="lv-vs" style="%s;background:#fdedec;"><b style="color:#c0392b;">破线</b></td>' % style)
             else:
-                tds.append('<td style="%s"><b style="color:#1e8449;">+%s%%</b></td>' % (style, v))
+                tds.append('<td class="lv-vs" style="%s"><b style="color:#1e8449;">+%s%%</b></td>' % (style, v))
         elif col in ('收盘站回D0低', 'D1阳线', 'D1站回MA5'):
             tds.append('<td style="%s">%s</td>' % (style, _chk(v)))
         elif col == 'D0跌幅%':
@@ -273,12 +273,26 @@ def _row(r, cols):
     bg = ''
     if sig == '待确认(D1未到)' and star >= 4: bg = 'background:#fdebd0;'
     elif '排雷' in sig: bg = 'background:#f2f4f4;'
-    return '<tr data-star="%d" data-sig="%s"%s>%s</tr>' % (star, sig, (' style="%s"' % bg if bg else ''), ''.join(tds))
+    if live:
+        tds.append('<td class="lq" style="padding:3px 7px;white-space:nowrap;color:#95a5a6;">…</td>')
+    attrs = ''
+    if live:
+        attrs = ' data-code="%s"' % r['代码']
+        base = r['D0最低价'] if 'D0最低价' in r.index else None
+        if pd.notna(base):
+            attrs += ' data-d0low="%.2f"' % base
+        if live == 'd1':
+            d1d = str(r['D1日期']).replace('-', '') if pd.notna(r.get('D1日期')) else ''
+            attrs += ' data-d1date="%s"' % d1d
+        attrs += ' data-name="%s"' % str(r['名称']).replace('"', '')
+    return '<tr data-star="%d" data-sig="%s"%s%s>%s</tr>' % (star, sig, attrs, (' style="%s"' % bg if bg else ''), ''.join(tds))
 
-def _table(cols, rows_df, bg='#fff'):
+def _table(cols, rows_df, bg='#fff', live=False):
     thead = ''.join('<th>%s</th>' % c for c in cols)
-    trs = ''.join(_row(r, cols) for _, r in rows_df.iterrows())
-    return '<table style="background:%s;"><thead><tr>%s</tr></thead><tbody>%s</tbody></table>' % (bg, thead, trs)
+    if live:
+        thead += '<th style="background:#1e8449;">实时价</th>'
+    trs = ''.join(_row(r, cols, live=live) for _, r in rows_df.iterrows())
+    return '<div class="tw"><table style="background:%s;"><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>' % (bg, thead, trs)
 
 def to_html(out):
     D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0_K值','明日MA5参考','明日量比基准(手)','信号']
@@ -286,6 +300,9 @@ def to_html(out):
     D2_COLS = ['D0日期','代码','名称','信号','D1日期','D1涨幅%','D1收盘位置','D2涨幅%','D3涨幅%','D4涨幅%','D5涨幅%','确认后逐日','验证_后续大涨']
 
     last = out['D0日期'].max()
+    import time as _t
+    _today = _t.strftime('%Y-%m-%d')
+    _live_note = ' · <b style="color:#0e6251;">含今日盘中实时</b>' if (last == _today and _t.localtime().tm_hour < 15) else ''
     # ① 明日盯盘
     watch = out[(out['D0日期']==last) & (out['信号']=='待确认(D1未到)')].sort_values('优先分', ascending=False)
     watch_top = watch.head(30)
@@ -316,11 +333,11 @@ def to_html(out):
         card('%.0f%%' % hitA, '全部确认信号 兑现率', '表内验证 n=%d' % len(confA), '#b8860b'),
     ])
 
-    html = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><title>急跌候选池·决策看板</title>
+    html = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5"><title>急跌候选池·决策看板</title>
 <style>
 body{font-family:-apple-system,'PingFang SC',sans-serif;margin:16px 20px;color:#2c3e50;font-size:13px;background:#f4f6f7;}
 h2{margin:6px 0 10px;} h3{margin:24px 0 8px;scroll-margin-top:56px;}
-.nav{position:sticky;top:0;z-index:99;background:#2c3e50;border-radius:8px;padding:7px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 6px;box-shadow:0 1px 4px rgba(0,0,0,.15);}
+.nav{position:sticky;top:37px;z-index:98;background:#2c3e50;border-radius:8px;padding:7px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0 6px;box-shadow:0 1px 4px rgba(0,0,0,.15);}
 .nav b{color:#fff;font-size:13px;}
 .zbtn{border:1px solid #5d6d7e;background:#34495e;border-radius:14px;padding:4px 14px;cursor:pointer;font-size:13px;color:#fff;}
 .zbtn.on{background:#fff;color:#2c3e50;font-weight:600;border-color:#fff;}
@@ -335,7 +352,7 @@ h2{margin:6px 0 10px;} h3{margin:24px 0 8px;scroll-margin-top:56px;}
 .csub{color:#7f8c8d;font-size:12px;margin-top:2px;}
 table{border-collapse:collapse;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:6px;}
 td,th{border:1px solid #d5dbdb;text-align:center;}
-th{padding:5px 8px;background:#2c3e50;color:#fff;white-space:nowrap;position:sticky;top:40px;}
+th{padding:5px 8px;background:#2c3e50;color:#fff;white-space:nowrap;position:sticky;top:76px;}
 tbody tr:hover{background:#ebf5fb !important;}
 .note{background:#fef9e7;border:1px solid #f7dc6f;padding:10px 14px;border-radius:6px;margin:8px 0;line-height:1.8;max-width:1000px;}
 .sec{color:#fff;padding:4px 10px;border-radius:4px;display:inline-block;}
@@ -348,9 +365,54 @@ details{margin:4px 0 14px;} summary{cursor:pointer;color:#2e86c1;font-size:13px;
 button{border:1px solid #aab7b8;background:#fff;border-radius:15px;padding:4px 14px;cursor:pointer;font-size:13px;color:#2c3e50;}
 button.on{background:#2c3e50;color:#fff;border-color:#2c3e50;}
 input#q{border:1px solid #aab7b8;border-radius:15px;padding:5px 14px;font-size:13px;width:200px;outline:none;}
+.livebar{position:sticky;top:0;z-index:98;display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:#0e6251;color:#fff;border-radius:8px;padding:6px 14px;margin:8px 0 6px;font-size:13px;box-shadow:0 1px 5px rgba(0,0,0,.2);}
+.livebar b{color:#fff;}
+.livebar .dot{width:9px;height:9px;border-radius:50%;background:#2ecc71;display:inline-block;animation:pl 1.6s infinite;}
+.livebar .dot.off{background:#f39c12;animation:none;}
+@keyframes pl{0%{opacity:1}50%{opacity:.25}100%{opacity:1}}
+.livebar button{border:1px solid #7fb3a8;background:#148f77;color:#fff;border-radius:12px;padding:2px 12px;font-size:12px;cursor:pointer;}
+.livebar .lvnote{color:#a2d9ce;font-size:12px;margin-left:auto;}
+.brk{background:#fdedec;color:#c0392b;font-size:11px;border-radius:3px;padding:0 4px;font-weight:700;}
+tr.brkrow{background:#fff2f0 !important;}
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;}
+@media (max-width:820px){
+  body{padding:8px 8px 40px;}
+  h2{font-size:16px;line-height:1.4;}
+  h2 small{display:block;font-size:11px;margin-top:2px;}
+  h3{font-size:13px;margin:14px 0 6px;}
+  .sec{padding:3px 7px;font-size:12px;}
+  .livebar{position:static;font-size:12px;gap:6px;padding:6px 10px;}
+  .livebar .lvnote{display:none;}
+  .nav{position:static;font-size:12px;gap:6px;padding:6px 8px;}
+  .nav .tip{display:none;}
+  .zbtn{padding:4px 10px;font-size:12px;}
+  .cards{gap:6px;}
+  .card{min-width:0;flex:1 1 45%;padding:7px 10px;}
+  .cnum{font-size:20px;} .clabel{font-size:12px;} .csub{font-size:10px;}
+  .note{font-size:12px;line-height:1.65;padding:8px 10px;}
+  .fbar{gap:5px;}
+  .fbtn,button{font-size:12px;padding:3px 10px;}
+  input#q{width:130px;font-size:12px;}
+  table{margin-bottom:8px;}
+  th,td{font-size:11px;padding:3px 5px;}
+  th{position:static;}
+  .chip{font-size:10px;padding:1px 4px;margin:0 1px;}
+  .lq,.lv-low,.lv-vs{font-size:11px;}
+}
 </style></head><body>
-<h2>急跌候选池 · 决策看板 <small style="color:#7f8c8d;font-size:13px;">数据截止 __LAST__（__WK__）收盘后生成</small></h2>
+<h2>急跌候选池 · 决策看板 <small style="color:#7f8c8d;font-size:13px;">数据截止 __LAST__（__WK__）__LIVENOTE__</small></h2>
 <div class="cards">__CARDS__</div>
+<div class="livebar" id="livebar">
+<span class="dot" id="lvdot"></span>
+<b>实时行情</b>
+<span id="lvmsg">启动中…</span>
+<span style="color:#a2d9ce;">|</span>
+<span>①区破预警线 <b id="lvbrk1" style="color:#ff7675;">–</b> 只</span>
+<span style="color:#a2d9ce;">|</span>
+<span>②区破线 <b id="lvbrk2" style="color:#ff7675;">–</b> 只</span>
+<button id="lvbtn" onclick="lvToggle()">暂停</button>
+<span class="lvnote">价格/涨跌幅/当日最低 = 腾讯实时 · 每20秒(休市120秒)</span>
+</div>
 <div class="nav">
 <b>导航:</b>
 <button class="zbtn on" onclick="zone('all',this)">全部</button>
@@ -432,17 +494,105 @@ function apply(){
   document.getElementById('cnt').textContent='显示 '+n+' 行';
 }
 apply();
+
+/* ================= 实时行情刷新（腾讯行情 · 跨域 script 注入） ================= */
+var lvOn=true, lvTimer=null, lvCodes=[], lvQuotes={};
+function lvToday(){var d=new Date();return ''+d.getFullYear()+('0'+(d.getMonth()+1)).slice(-2)+('0'+d.getDate()).slice(-2);}
+function lvInSession(){
+  var d=new Date(),w=d.getDay();if(w===0||w===6)return false;
+  var m=d.getHours()*100+d.getMinutes();
+  return (m>=925&&m<=1132)||(m>=1258&&m<=1502);
+}
+function lvCollect(){
+  var seen={},arr=[];
+  document.querySelectorAll('tr[data-code]').forEach(function(tr){
+    var c=tr.dataset.code;if(c&&!seen[c]){seen[c]=1;arr.push(c);}
+  });
+  lvCodes=arr;return arr;
+}
+function lvLoad(codes,cb){
+  var s=document.createElement('script');s.charset='GBK';
+  s.src='https://qt.gtimg.cn/q='+codes.join(',')+'&_='+Date.now();
+  var done=false;
+  s.onload=s.onerror=function(){if(done)return;done=true;try{s.remove();}catch(e){}cb();};
+  document.head.appendChild(s);
+}
+function lvApply(){
+  var tdy=lvToday(),okSet={},b1=0,b2=0;
+  document.querySelectorAll('tr[data-code]').forEach(function(tr){
+    var code=tr.dataset.code,s=window['v_'+code];
+    if(!s)return;
+    var p=s.split('~');
+    if(p.length<35)return;
+    var price=parseFloat(p[3]),pct=parseFloat(p[32]),low=parseFloat(p[34]);
+    if(!isFinite(price)||price<=0)return;
+    okSet[code]=1;
+    var col = pct>0.001?'#c0392b':(pct<-0.001?'#1e8449':'#566573');
+    var sign = pct>0.001?'+':'';
+    var d0=parseFloat(tr.dataset.d0low||'');
+    var d1d=tr.dataset.d1date||'';
+    var lq=tr.querySelector('.lq');
+    if(lq){
+      var html='<b style="color:'+col+';">'+price.toFixed(2)+'</b> <span style="font-size:11px;color:'+col+';">'+sign+pct.toFixed(2)+'%</span>';
+      if(!d1d&&isFinite(d0)&&d0>0&&price<d0){html+=' <span class="brk">破线</span>';b1++;}
+      lq.innerHTML=html;lq.style.color='';
+    }
+    if(isFinite(d0)&&d0>0&&isFinite(low)&&low>0&&(!d1d||d1d===tdy)){
+      var cl=tr.querySelector('.lv-low');if(cl)cl.textContent=low.toFixed(2);
+      var vs=tr.querySelector('.lv-vs');
+      if(vs){
+        var g=(low-d0)/d0*100;
+        if(g<=0.001){vs.style.background='#fdedec';vs.innerHTML='<b style="color:#c0392b;">破线</b>';b2++;tr.classList.add('brkrow');}
+        else{vs.style.background='';vs.innerHTML='<b style="color:'+(g<1?'#d35400':'#1e8449')+';">+'+g.toFixed(1)+'%</b>';tr.classList.remove('brkrow');}
+      }
+    }
+  });
+  return {ok:Object.keys(okSet).length,b1:b1,b2:b2};
+}
+function lvDone(){
+  var r=lvApply();
+  var d=new Date(),pad=function(n){return ('0'+n).slice(-2);};
+  var hh=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+  var sess=lvInSession();
+  document.getElementById('lvmsg').innerHTML=(sess?'<b style="color:#7dcea0;">盘中实时</b>':'<span style="color:#f8c471;">非交易时段·显示最近价</span>')
+    +' · 更新 '+hh+' · 覆盖 '+r.ok+'/'+lvCodes.length+' 只';
+  document.getElementById('lvbrk1').textContent=r.b1;
+  document.getElementById('lvbrk2').textContent=r.b2;
+  var dot=document.getElementById('lvdot');
+  dot.className='dot'+(lvOn?'':(sess?'':' off'));
+  clearTimeout(lvTimer);
+  if(lvOn)lvTimer=setTimeout(lvRefresh,sess?20000:120000);
+}
+function lvRefresh(){
+  if(!lvOn)return;
+  var codes=lvCollect();if(!codes.length)return;
+  var B=90,bs=[],i;
+  for(i=0;i<codes.length;i+=B)bs.push(codes.slice(i,i+B));
+  var k=0;
+  (function next(){
+    if(k>=bs.length){lvDone();return;}
+    lvLoad(bs[k++],function(){setTimeout(next,50);});
+  })();
+}
+function lvToggle(){
+  lvOn=!lvOn;
+  document.getElementById('lvbtn').textContent=lvOn?'暂停':'继续';
+  document.getElementById('lvmsg').innerHTML=lvOn?'继续刷新中…':'已暂停（点「继续」恢复）';
+  clearTimeout(lvTimer);
+  if(lvOn)lvRefresh();
+}
+setTimeout(lvRefresh,600);
 </script>
 </body></html>""" \
-        .replace('__LAST__', last).replace('__WK__', _wk(last)) \
+        .replace('__LAST__', last).replace('__WK__', _wk(last)).replace('__LIVENOTE__', _live_note) \
         .replace('__CARDS__', cards) \
         .replace('__NWATCH__', str(len(watch))).replace('__NTOP__', str(len(watch_top))) \
-        .replace('__WATCH_REST__', _table(D0_COLS, watch.iloc[30:], '#fdfefe') if len(watch)>30 else '') \
-        .replace('__WATCH__', _table(D0_COLS, watch_top, '#fdfefe')) \
+        .replace('__WATCH_REST__', _table(D0_COLS, watch.iloc[30:], '#fdfefe', live='price') if len(watch)>30 else '') \
+        .replace('__WATCH__', _table(D0_COLS, watch_top, '#fdfefe', live='price')) \
         .replace('__NREST__', str(max(0, len(watch)-len(watch_top)))) \
         .replace('__SIGDATE__', (d1_dates[-1] if d1_dates else '-')) \
         .replace('__NSIG__', str(len(sig_recent))) \
-        .replace('__SIG__', _table(D1_COLS, sig_recent, '#fdfefe') if len(sig_recent) else '<p style="color:#7f8c8d;">最近两个确认日无确认信号</p>') \
+        .replace('__SIG__', _table(D1_COLS, sig_recent, '#fdfefe', live='d1') if len(sig_recent) else '<p style="color:#7f8c8d;">最近两个确认日无确认信号</p>') \
         .replace('__REVIEW__', _table(D2_COLS, review, '#fdfefe') if len(review) else '')
     open(os.path.join(STK, 'watchlist_tracker.html'), 'w').write(html)
     open(os.path.join(STK, 'index.html'), 'w').write(html)

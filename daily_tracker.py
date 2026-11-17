@@ -221,7 +221,7 @@ def build(days=20):
         '状态': pool['状态'], '信号': pool['信号'],
         '核对日': pool['核对日'], '核对日期': pool['核对日期'],
         'D1日期': pool['d1_date'],
-        '核对日最低(现)': pd.Series(_chk_low, index=pool.index).round(2), 'vs预警线': ((pd.Series(_chk_low, index=pool.index) / pool['low'] - 1) * 100).round(1),
+        '今日最低(现)': pd.Series(_chk_low, index=pool.index).round(2), 'vs预警线': ((pd.Series(_chk_low, index=pool.index) / pool['low'] - 1) * 100).round(1),
         '①站回D0低': _m_nnl,
         '②阳线': _m_yang,
         '③站回MA5': _m_above,
@@ -296,7 +296,7 @@ def _row(r, cols, live=False):
                 tds.append('<td class="d0px" style="%s"><span style="color:#7f8c8d;font-size:11px;">中性</span></td>' % style)
         elif col == 'D0最低价':
             tds.append('<td style="%s"><b style="color:#c0392b;">%s</b></td>' % (style, v))
-        elif col == '核对日最低(现)':
+        elif col == '今日最低(现)':
             tds.append('<td class="lv-low" style="%s">%s</td>' % (style, v if pd.notna(v) else '·'))
         elif col == 'vs预警线':
             if pd.isna(v):
@@ -355,7 +355,7 @@ def _table(cols, rows_df, bg='#fff', live=False):
 
 def to_html(out):
     D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0性质','D0_K值','明日MA5参考','明日量比基准(手)','信号']
-    D1_COLS = ['D0日期','代码','名称','信号','核对日','核对日最低(现)','vs预警线','①站回D0低','②阳线','③站回MA5','④量比≥1','核对量比','核对日涨幅%','核对日收盘位置','K位置60日']
+    D1_COLS = ['D0日期','代码','名称','信号','核对日','D0最低价','今日最低(现)','vs预警线','①站回D0低','②阳线','③站回MA5','④量比≥1','核对量比','核对日涨幅%','核对日收盘位置','K位置60日']
     D2_COLS = ['D0日期','代码','名称','信号','核对日','核对日涨幅%','核对日收盘位置','D2涨幅%','D3涨幅%','D4涨幅%','D5涨幅%','确认后逐日','验证_后续大涨']
 
     last = out['D0日期'].max()
@@ -434,6 +434,7 @@ input#q{border:1px solid #aab7b8;border-radius:15px;padding:5px 14px;font-size:1
 .livebar button{border:1px solid #7fb3a8;background:#148f77;color:#fff;border-radius:12px;padding:2px 12px;font-size:12px;cursor:pointer;}
 .livebar .lvnote{color:#a2d9ce;font-size:12px;margin-left:auto;}
 .brk{background:#fdedec;color:#c0392b;font-size:11px;border-radius:3px;padding:0 4px;font-weight:700;}
+.nowtag{display:inline-block;font-size:10px;color:#0e6251;background:#d1f2eb;border-radius:3px;padding:0 3px;font-weight:700;margin-left:2px;}
 tr.brkrow{background:#fff2f0 !important;}
 .tw{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%;}
 @media (min-width:821px){.tw{overflow-x:visible;}}
@@ -540,6 +541,7 @@ __REVIEW__
 <b>▎有效期提醒</b>：涨停基因的加成集中在<b>涨停后10个交易日内</b>（10日窗口大涨率48.6% vs 无涨停23.5%），「涨停距今天数」&gt;10 的票自动失效。<br>
 <b>▎「核对日」与四项逐项打勾（②区）</b><br>
 每只票四个信号 <span style="color:#1e8449;font-weight:700;">●</span>到位 / <span style="color:#c0392b;font-weight:700;">✗</span>未到位 / <span style="color:#bdc3c7;">–</span>还没轮到，逐项标在②区表格里。「核对日」列显示当前核到第几天：D1 没凑齐的票会<b>自动滚动到最新交易日继续核</b>（近一年回测：27% 的票要等 D2~D5 才确认，且晚确认质量不打折——D1 43.6% / D2 47.3% / D5 48.7%）。四项全中的当天就是<b>确认日</b>，当天 13:00-14:55 买入、次日卖；超过 5 天还没凑齐或「涨停距今天数」&gt;10，放弃。<br>
+<b>▎「D0最低价」vs「今日最低(现)」（②区两列并排）</b>：左列 = <b>D0预警线锚</b>（固定不变，整个 D1~D5 窗口都比它），右列 = <b>核对日当天最低价</b>（盘中每20秒实时刷新，带 <span class="nowtag">今</span> 标 = 正在用当日实时数据）；<b>右列低于左列 = 盘中破线</b>（红底「破线」），14:30 后看收盘能否站回来定①项成不成立——两列放一起就是为了不用来回翻①区找锚价。
 <b>▎「D0性质」—— 今天这根急跌是洗盘还是出货？（全历史 n=26608 回测）</b><br>
 <span class="chip up">● 偏洗盘</span> = <b>放量急跌(量比≥1.2) + 涨停1~2天内</b>：下跌有承接、分歧换手充分，次日反抽概率最高，<b>确认率 15.5%</b>（基线7.3%的2倍+），优先盯。<br>
 <span class="chip dn">▼ 偏出货</span> = <b>缩量阴跌(量比&lt;0.7)</b>：没有资金接、阴跌磨人，次日确认率仅 <b>3.0%</b>；其中缩量+涨停1~2天的最坑，确认后次日卖出均值 <b>-2.29%</b>（全表最差），直接跳过、别浪费精力。<br>
@@ -621,7 +623,7 @@ function lvApply(){
       lq.innerHTML=html;lq.style.color='';
     }
     if(isFinite(d0)&&d0>0&&isFinite(low)&&low>0&&(!d1d||d1d===tdy)){
-      var cl=tr.querySelector('.lv-low');if(cl)cl.textContent=low.toFixed(2);
+      var cl=tr.querySelector('.lv-low');if(cl)cl.innerHTML=low.toFixed(2)+' <span class="nowtag">今</span>';
       var vs=tr.querySelector('.lv-vs');
       if(vs){
         var g=(low-d0)/d0*100;

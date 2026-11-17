@@ -423,6 +423,8 @@ th.fth .cfbtn.act{background:#e67e22;color:#fff;}
 .cmenu .crange .csub{width:120px;flex:1;}
 .cmenu .cbtns{display:flex;gap:4px;}
 .cmenu .cbtns button{flex:1;text-align:center;}
+.cmenu .clist{display:flex;flex-direction:column;gap:3px;}
+.cmenu .copt.on{background:#d6eaf8;font-weight:600;}
 .cmenu .cok{background:#2c3e50;color:#fff;}
 .nav .tip{color:#aab7b8;font-size:12px;margin-left:auto;}
 .zone{margin-bottom:8px;}
@@ -622,7 +624,8 @@ function apply(){
       if(tf)for(var k in tf){var td=tr.cells[k];if(!td){ok=false;break;}
         var f=tf[k],txt=td.textContent.trim();
         if(f.t=='v'){if(txt!==f.v){ok=false;break;}}
-        else if(f.t=='s'){if(txt.toUpperCase().indexOf(f.s)<0){ok=false;break;}}
+        else if(f.t=='m'){if(f.v.indexOf(txt)<0){ok=false;break;}}
+        else if(f.t=='s'){var hit=false;for(var q=0;q<f.ks.length;q++)if(txt.toUpperCase().indexOf(f.ks[q])>=0){hit=true;break;}if(!hit){ok=false;break;}}
         else{var x=numv(txt);if(isNaN(x)||(f.min!=null&&x<f.min)||(f.max!=null&&x>f.max)){ok=false;break;}}}}
     if(ok&&q)ok=tr.textContent.toUpperCase().indexOf(q)>=0;
     tr.style.display=ok?'':'none';if(ok)n++;
@@ -660,10 +663,21 @@ function colToggle(tb,ci,btn){
   var numeric=vals.length>0&&vals.every(function(v){return !isNaN(numv(v));});
   var m=document.createElement('div');m.className='cmenu';
   if(vals.length<=15){
-    var h='<button data-v="">全部'+(cur?'':' ✓')+'</button>';
-    vals.forEach(function(v){h+='<button data-v="'+v.replace(/"/g,'&quot;')+'">'+(cur&&cur.t=='v'&&cur.v===v?'✓ ':'')+v+'</button>';});
+    var sel=new Set();
+    if(cur&&cur.t=='m')cur.v.forEach(function(x){sel.add(x);});
+    else if(cur&&cur.t=='v')sel.add(cur.v);
+    var h='<div class="clist">';
+    vals.forEach(function(v){var on=sel.has(v);h+='<button class="copt'+(on?' on':'')+'" data-v="'+v.replace(/"/g,'&quot;')+'">'+(on?'✓ ':'')+v+'</button>';});
+    h+='</div><div class="cbtns"><button class="cok">应用</button><button class="cclr">清除</button></div>';
     m.innerHTML=h;
-    m.querySelectorAll('button').forEach(function(ob){ob.onclick=function(ev){ev.stopPropagation();colSet(tb,ci,ob.dataset.v?{t:'v',v:ob.dataset.v}:null);m.remove();curMenu=null;};});
+    m.querySelectorAll('.copt').forEach(function(ob){ob.onclick=function(ev){ev.stopPropagation();
+      var v=ob.dataset.v;
+      if(sel.has(v)){sel.delete(v);ob.classList.remove('on');ob.textContent=v;}
+      else{sel.add(v);ob.classList.add('on');ob.textContent='✓ '+v;}
+    };});
+    m.querySelector('.cok').onclick=function(ev){ev.stopPropagation();
+      colSet(tb,ci,sel.size?{t:'m',v:Array.from(sel)}:null);m.remove();curMenu=null;};
+    m.querySelector('.cclr').onclick=function(ev){ev.stopPropagation();colSet(tb,ci,null);m.remove();curMenu=null;};
   }else if(numeric){
     m.innerHTML='<div class="crange"><input class="cmin" type="number" placeholder="最小" step="any"><span>~</span><input class="cmax" type="number" placeholder="最大" step="any"></div><div class="cbtns"><button class="cok">应用</button><button class="cclr">清除</button></div>';
     if(cur&&cur.t=='r'){m.querySelector('.cmin').value=cur.min!=null?cur.min:'';m.querySelector('.cmax').value=cur.max!=null?cur.max:'';}
@@ -673,11 +687,12 @@ function colToggle(tb,ci,btn){
       colSet(tb,ci,f);m.remove();curMenu=null;};
     m.querySelector('.cclr').onclick=function(ev){ev.stopPropagation();colSet(tb,ci,null);m.remove();curMenu=null;};
   }else{
-    m.innerHTML='<div class="crange"><input class="csub" type="text" placeholder="包含关键字"></div><div class="cbtns"><button class="cok">应用</button><button class="cclr">清除</button></div>';
-    if(cur&&cur.t=='s')m.querySelector('.csub').value=cur.s;
+    m.innerHTML='<div class="crange"><input class="csub" type="text" placeholder="多关键词用逗号/空格隔开"></div><div class="cbtns"><button class="cok">应用</button><button class="cclr">清除</button></div>';
+    if(cur&&cur.t=='s')m.querySelector('.csub').value=cur.ks.join(' ');
     m.querySelector('.cok').onclick=function(ev){ev.stopPropagation();
-      var s=m.querySelector('.csub').value.trim().toUpperCase();
-      colSet(tb,ci,s?{t:'s',s:s}:null);m.remove();curMenu=null;};
+      var s=m.querySelector('.csub').value.trim();
+      var ks=s?s.split(/[,，\s]+/).filter(Boolean).map(function(x){return x.toUpperCase();}):null;
+      colSet(tb,ci,ks?{t:'s',ks:ks}:null);m.remove();curMenu=null;};
     m.querySelector('.cclr').onclick=function(ev){ev.stopPropagation();colSet(tb,ci,null);m.remove();curMenu=null;};
   }
   document.body.appendChild(m);

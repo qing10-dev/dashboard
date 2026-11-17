@@ -404,6 +404,14 @@ h2{margin:6px 0 10px;} h3{margin:24px 0 8px;scroll-margin-top:calc(var(--hd,76px
 .zbtn.on{background:#fff;color:#2c3e50;font-weight:600;border-color:#fff;}
 .zbtn.hot{border-color:#e67e22;}
 .zbtn.hot.on{background:#e67e22;color:#fff;border-color:#e67e22;}
+.zwrap{display:inline-flex;align-items:center;gap:2px;position:relative;}
+.zfbtn{border:1px solid #5d6d7e;background:#34495e;border-radius:12px;padding:4px 8px;cursor:pointer;font-size:11px;color:#d6dbdf;}
+.zfbtn.act{background:#e67e22;border-color:#e67e22;color:#fff;}
+.zmenu{display:none;position:absolute;top:calc(100% + 4px);left:0;background:#fff;border:1px solid #aab7b8;border-radius:8px;box-shadow:0 3px 12px rgba(0,0,0,.18);padding:6px;z-index:99;white-space:nowrap;}
+.zmenu.open{display:flex;flex-direction:column;gap:4px;}
+.zmenu button{border:none;background:#f4f6f7;border-radius:10px;padding:4px 14px;font-size:12px;text-align:left;cursor:pointer;color:#2c3e50;}
+.zmenu button:hover{background:#d6eaf8;}
+.zmenu button.on{background:#2c3e50;color:#fff;}
 .nav .tip{color:#aab7b8;font-size:12px;margin-left:auto;}
 .zone{margin-bottom:8px;}
 .cards{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0 4px;}
@@ -444,12 +452,14 @@ tr.brkrow{background:#fff2f0 !important;}
   h2 small{display:block;font-size:11px;margin-top:2px;}
   h3{font-size:13px;margin:14px 0 6px;}
   .sec{padding:3px 7px;font-size:12px;}
-  .headbar{position:static;}
+  .headbar{margin:4px 0 2px;}
   .livebar{font-size:12px;gap:6px;padding:6px 10px;}
   .livebar .lvnote{display:none;}
   .nav{font-size:12px;gap:6px;padding:6px 8px;}
   .nav .tip{display:none;}
   .zbtn{padding:4px 10px;font-size:12px;}
+  .zfbtn{padding:3px 6px;font-size:11px;}
+  .zmenu{max-height:55vh;overflow:auto;}
   .cards{gap:6px;}
   .card{min-width:0;flex:1 1 45%;padding:7px 10px;}
   .cnum{font-size:20px;} .clabel{font-size:12px;} .csub{font-size:10px;}
@@ -481,11 +491,11 @@ tr.brkrow{background:#fff2f0 !important;}
 <div class="nav">
 <b>导航:</b>
 <button class="zbtn on" onclick="zone('all',this)">全部</button>
-<button class="zbtn" onclick="zone('1',this)">① 明日盯盘</button>
-<button class="zbtn hot" onclick="zone('2',this)">② 今日信号 ★重点</button>
-<button class="zbtn" onclick="zone('3',this)">③ 复盘走势</button>
+<span class="zwrap"><button class="zbtn" onclick="zone('1',this)">① 明日盯盘</button><button class="zfbtn" onclick="zfToggle(1,this,event)" title="本区筛选">▾</button><span class="zmenu" data-zk="1"><button class="on" onclick="zfSet(1,'all',this)">全部</button><button onclick="zfSet(1,'star',this)">3★以上</button><button onclick="zfSet(1,'px',this)">偏洗盘</button><button onclick="zfSet(1,'偏出货',this)">偏出货</button><button onclick="zfSet(1,'中性',this)">中性</button><button onclick="zfSet(1,'待确认',this)">待确认</button></span></span>
+<span class="zwrap"><button class="zbtn hot" onclick="zone('2',this)">② 今日信号 ★重点</button><button class="zfbtn" onclick="zfToggle(2,this,event)" title="本区筛选">▾</button><span class="zmenu" data-zk="2"><button class="on" onclick="zfSet(2,'all',this)">全部</button><button onclick="zfSet(2,'顶格',this)">顶格(89%)</button><button onclick="zfSet(2,'强确认',this)">强确认(86%)</button><button onclick="zfSet(2,'确认',this)">确认(74%)</button><button onclick="zfSet(2,'排雷',this)">排雷(43%)</button><button onclick="zfSet(2,'部分确认',this)">部分确认</button><button onclick="zfSet(2,'px',this)">偏洗盘</button></span></span>
+<span class="zwrap"><button class="zbtn" onclick="zone('3',this)">③ 复盘走势</button><button class="zfbtn" onclick="zfToggle(3,this,event)" title="本区筛选">▾</button><span class="zmenu" data-zk="3"><button class="on" onclick="zfSet(3,'all',this)">全部</button><button onclick="zfSet(3,'顶格',this)">顶格(89%)</button><button onclick="zfSet(3,'强确认',this)">强确认(86%)</button><button onclick="zfSet(3,'确认',this)">确认(74%)</button><button onclick="zfSet(3,'排雷',this)">排雷(43%)</button><button onclick="zfSet(3,'部分确认',this)">部分确认</button></span></span>
 <button class="zbtn" onclick="zone('4',this)">④ 说明书·胜率速查</button>
-<span class="tip">点一下只看该区 · 「全部」看全貌</span>
+<span class="tip">点一下只看该区 · 每项旁「▾」筛本区</span>
 </div>
 </div>
 <div class="fbar">
@@ -554,6 +564,37 @@ __REVIEW__
 <br><i style="color:#7f8c8d;">历史统计口径，含一字板等买不进情形，不构成个人投资建议。</i>
 <script>
 var cur='all';
+var zfl={1:'all',2:'all',3:'all'};
+function fm(f,tr){
+  var s=tr.dataset.sig||'';
+  if(f=='star')return +tr.dataset.star>=3;
+  if(f=='px')return tr.dataset.px==='偏洗盘';
+  if(f=='偏出货'||f=='中性')return tr.dataset.px===f;
+  if(f=='确认')return s.indexOf('确认(74')>=0;
+  if(f=='部分确认')return s.indexOf('部分确认')>=0;
+  if(f=='待确认')return s.indexOf('待确认')>=0;
+  if(f=='排雷')return s.indexOf('排雷')>=0;
+  return s.indexOf(f)>=0;
+}
+function zfToggle(k,btn,ev){
+  ev.stopPropagation();
+  document.querySelectorAll('.zmenu').forEach(function(m){if(m.dataset.zk!==String(k))m.classList.remove('open')});
+  btn.closest('.zwrap').querySelector('.zmenu').classList.toggle('open');
+}
+function zfSet(k,f,ob){
+  zfl[k]=f;
+  var w=ob.closest('.zwrap');
+  w.querySelectorAll('.zmenu button').forEach(function(b){b.classList.remove('on')});
+  ob.classList.add('on');
+  var zfb=w.querySelector('.zfbtn');
+  zfb.classList.toggle('act',f!=='all');
+  zfb.textContent=(f==='all')?'▾':'▾ '+ob.textContent;
+  w.querySelector('.zmenu').classList.remove('open');
+  apply();
+}
+document.addEventListener('click',function(e){
+  if(!e.target.closest('.zwrap'))document.querySelectorAll('.zmenu').forEach(function(m){m.classList.remove('open')});
+});
 function zone(z,btn){
   document.querySelectorAll('.zbtn').forEach(function(b){b.classList.remove('on')});btn.classList.add('on');
   document.querySelectorAll('.zone').forEach(function(s){s.style.display=(z=='all'||s.dataset.z==z)?'':'none';});
@@ -563,7 +604,8 @@ function filt(s,btn){cur=s;document.querySelectorAll('.fbtn').forEach(function(b
 function apply(){
   var q=document.getElementById('q').value.trim().toUpperCase();var n=0;
   document.querySelectorAll('tbody tr[data-star]').forEach(function(tr){
-    var ok=(cur=='all')||(cur=='star'?+tr.dataset.star>=3:(cur=='排雷'?tr.dataset.sig.indexOf('排雷')>=0:(cur=='px'?tr.dataset.px==='偏洗盘':tr.dataset.sig===cur)));
+    var sec=tr.closest('section.zone');var zf=sec?(zfl[sec.dataset.z]||'all'):'all';
+    var ok=(cur=='all'||fm(cur,tr))&&(zf=='all'||fm(zf,tr));
     if(ok&&q)ok=tr.textContent.toUpperCase().indexOf(q)>=0;
     tr.style.display=ok?'':'none';if(ok)n++;
   });

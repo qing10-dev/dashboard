@@ -412,6 +412,12 @@ h2{margin:6px 0 10px;} h3{margin:24px 0 8px;scroll-margin-top:calc(var(--hd,76px
 .zmenu button{border:none;background:#f4f6f7;border-radius:10px;padding:4px 14px;font-size:12px;text-align:left;cursor:pointer;color:#2c3e50;}
 .zmenu button:hover{background:#d6eaf8;}
 .zmenu button.on{background:#2c3e50;color:#fff;}
+th.fth .cfbtn{border:none;background:rgba(255,255,255,.18);color:#fff;border-radius:3px;padding:0 5px;margin-left:4px;font-size:10px;cursor:pointer;font-weight:400;}
+th.fth .cfbtn:hover{background:rgba(255,255,255,.35);}
+th.fth .cfbtn.act{background:#e67e22;color:#fff;}
+.cmenu{position:fixed;z-index:120;background:#fff;border:1px solid #aab7b8;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.2);padding:6px;display:flex;flex-direction:column;gap:3px;max-height:55vh;overflow:auto;min-width:140px;}
+.cmenu button{border:none;background:#f4f6f7;border-radius:8px;padding:4px 14px;font-size:12px;text-align:left;cursor:pointer;color:#2c3e50;white-space:nowrap;}
+.cmenu button:hover{background:#d6eaf8;}
 .nav .tip{color:#aab7b8;font-size:12px;margin-left:auto;}
 .zone{margin-bottom:8px;}
 .cards{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0 4px;}
@@ -606,12 +612,67 @@ function apply(){
   document.querySelectorAll('tbody tr[data-star]').forEach(function(tr){
     var sec=tr.closest('section.zone');var zf=sec?(zfl[sec.dataset.z]||'all'):'all';
     var ok=(cur=='all'||fm(cur,tr))&&(zf=='all'||fm(zf,tr));
+    if(ok){var tb=tr.closest('table'),tf=tb&&tb._filters;
+      if(tf)for(var k in tf){var td=tr.cells[k];if(!td||td.textContent.trim()!==tf[k]){ok=false;break;}}}
     if(ok&&q)ok=tr.textContent.toUpperCase().indexOf(q)>=0;
     tr.style.display=ok?'':'none';if(ok)n++;
   });
   document.getElementById('cnt').textContent='显示 '+n+' 行';
 }
 apply();
+
+/* ================= 列头筛选（Excel式: 优先分/D0性质/信号） ================= */
+var FSET=['优先分','D0性质','信号'];
+var curMenu=null;
+function colInit(){
+  document.querySelectorAll('table').forEach(function(tb){
+    tb.querySelectorAll('thead th').forEach(function(th,ci){
+      if(FSET.indexOf(th.textContent.trim())<0)return;
+      th.classList.add('fth');
+      var b=document.createElement('button');b.className='cfbtn';b.textContent='▾';b.title='筛选本列';
+      b.onclick=function(ev){ev.stopPropagation();colToggle(tb,ci,b);};
+      th.appendChild(b);
+    });
+  });
+}
+function colUnique(tb,ci){
+  var seen={},out=[];
+  tb.querySelectorAll('tbody tr').forEach(function(tr){
+    var td=tr.cells[ci];if(!td)return;
+    var t=td.textContent.trim();if(!t||t==='·'||t==='–')return;
+    if(!seen[t]){seen[t]=1;out.push(t);}
+  });
+  return out.sort();
+}
+function colToggle(tb,ci,btn){
+  if(curMenu){curMenu.remove();curMenu=null;return;}
+  var m=document.createElement('div');m.className='cmenu';
+  var cur=tb._filters?tb._filters[ci]||'':'';
+  var h='<button data-v="">全部'+(cur?'':' ✓')+'</button>';
+  colUnique(tb,ci).forEach(function(v){h+='<button data-v="'+v.replace(/"/g,'&quot;')+'">'+(v===cur?'✓ ':'')+v+'</button>';});
+  m.innerHTML=h;
+  document.body.appendChild(m);
+  var r=btn.getBoundingClientRect();
+  m.style.left=Math.max(6,Math.min(r.left,window.innerWidth-170))+'px';
+  m.style.top=Math.min(r.bottom+3,window.innerHeight-200)+'px';
+  m.querySelectorAll('button').forEach(function(ob){
+    ob.onclick=function(ev){ev.stopPropagation();colSet(tb,ci,ob.dataset.v);m.remove();curMenu=null;};
+  });
+  curMenu=m;
+}
+function colSet(tb,ci,v){
+  tb._filters=tb._filters||{};
+  if(v)tb._filters[ci]=v;else delete tb._filters[ci];
+  tb.querySelectorAll('thead th').forEach(function(th,c){
+    var b=th.querySelector('.cfbtn');
+    if(b)b.classList.toggle('act',!!(tb._filters&&tb._filters[c]));
+  });
+  apply();
+}
+document.addEventListener('click',function(e){
+  if(curMenu&&!e.target.closest('.cmenu')&&!e.target.classList.contains('cfbtn')){curMenu.remove();curMenu=null;}
+});
+colInit();
 
 /* ================= 吸附头高度动态测量（防错位） ================= */
 function hdFix(){

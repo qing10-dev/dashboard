@@ -184,6 +184,7 @@ def build(days=20):
     pool['核对日'] = np.where(use_d1, 'D1·' + _d1s.str[5:],
                      np.where(_ckn >= 1, 'D' + _ckn.astype(str) + '·' + _cks.str[5:], ''))
     _chk_low = np.where(use_d1, pool['d1_low'], pool['chk_low'])
+    _chk_close = np.where(use_d1, pool['d1_close'], pool['chk_close'])
     _chk_vrat = np.where(use_d1, pool['d1_vrat'], pool['chk_vrat'])
     _chk_chg = np.where(use_d1, pool['d1_chg'], pool['chk_chg'])
     _chk_cpos = np.where(use_d1, pool['d1_cpos'], pool['chk_cpos'])
@@ -193,8 +194,7 @@ def build(days=20):
     _m_vok = np.where(use_d1, np.where(vok, '√', '×'), np.where(_ckn >= 1, np.where(vok_c, '√', '×'), '–'))
 
     pool['状态'] = np.where(d1_exist, 'D1已走完', 'D1待走(关注)')
-    # D1盘中最低 vs D0预警线: 盘中跑--update时d1_low=当日实时最低, 收盘后=全日最低
-    vs_jl = ((pool['d1_low'] / pool['low'] - 1) * 100).round(1)
+    # D1收盘价 vs D0预警线: 盘中跑--update时d1_close=当日实时最新价(近似收盘), 收盘后=正式收盘价
     bd = pool['big_day'].astype('Int64')
     is1 = (bd == 1).fillna(False)
     after = 'D1后第' + (bd - 1).astype('Int64').astype(str).replace('<NA>', '?') + '天≥6%'
@@ -221,7 +221,7 @@ def build(days=20):
         '状态': pool['状态'], '信号': pool['信号'],
         '核对日': pool['核对日'], '核对日期': pool['核对日期'],
         'D1日期': pool['d1_date'],
-        '今日最低(现)': pd.Series(_chk_low, index=pool.index).round(2), 'vs预警线': ((pd.Series(_chk_low, index=pool.index) / pool['low'] - 1) * 100).round(1),
+        '今日收盘(现)': pd.Series(_chk_close, index=pool.index).round(2), 'vs预警线': ((pd.Series(_chk_close, index=pool.index) / pool['low'] - 1) * 100).round(1),
         '①站回D0低': _m_nnl,
         '②阳线': _m_yang,
         '③站回MA5': _m_above,
@@ -296,8 +296,8 @@ def _row(r, cols, live=False):
                 tds.append('<td class="d0px" style="%s"><span style="color:#7f8c8d;font-size:11px;">中性</span></td>' % style)
         elif col == 'D0最低价':
             tds.append('<td style="%s"><b style="color:#c0392b;">%s</b></td>' % (style, v))
-        elif col == '今日最低(现)':
-            tds.append('<td class="lv-low" style="%s">%s</td>' % (style, v if pd.notna(v) else '·'))
+        elif col == '今日收盘(现)':
+            tds.append('<td class="lv-close" style="%s">%s</td>' % (style, v if pd.notna(v) else '·'))
         elif col == 'vs预警线':
             if pd.isna(v):
                 tds.append('<td class="lv-vs" style="%s"><span style="color:#bdc3c7;">–</span></td>' % style)
@@ -355,7 +355,7 @@ def _table(cols, rows_df, bg='#fff', live=False):
 
 def to_html(out):
     D0_COLS = ['D0日期','代码','名称','优先分','D0收盘','D0最低价','D0跌幅%','涨停距今天数','D0量比','D0性质','D0_K值','明日MA5参考','明日量比基准(手)','信号']
-    D1_COLS = ['D0日期','代码','名称','信号','核对日','D0最低价','今日最低(现)','vs预警线','①站回D0低','②阳线','③站回MA5','④量比≥1','核对量比','核对日涨幅%','核对日收盘位置','K位置60日']
+    D1_COLS = ['D0日期','代码','名称','信号','核对日','D0最低价','今日收盘(现)','vs预警线','①站回D0低','②阳线','③站回MA5','④量比≥1','核对量比','核对日涨幅%','核对日收盘位置','K位置60日']
     D2_COLS = ['D0日期','代码','名称','信号','核对日','核对日涨幅%','核对日收盘位置','D2涨幅%','D3涨幅%','D4涨幅%','D5涨幅%','确认后逐日','验证_后续大涨']
 
     last = out['D0日期'].max()
@@ -485,7 +485,7 @@ tr.brkrow{background:#fff2f0 !important;}
   th,td{font-size:11px;padding:3px 5px;}
   th{position:static;}
   .chip{font-size:10px;padding:1px 4px;margin:0 1px;}
-  .lq,.lv-low,.lv-vs{font-size:11px;}
+  .lq,.lv-close,.lv-vs{font-size:11px;}
 }
 </style></head><body>
 <h2>急跌候选池 · 决策看板 <small style="color:#7f8c8d;font-size:13px;">数据截止 __LAST__（__WK__）__LIVENOTE__</small></h2>
@@ -550,7 +550,7 @@ __REVIEW__
 <div class="note">
 <b>▎每天怎么用（3步，共约5分钟）</b><br>
 <b>收盘后</b>：跑 <code>python daily_tracker.py --update</code> 刷新看板（<b>盘中跑也安全</b>：实时半根K线只用于显示，不会污染历史数据，收盘后正式数据照常入库）→ 看导航<b>①区</b>今天急跌入池了哪些新票（登记即可，不用操作）。<br>
-<b>第二天盘中</b>：中午、14:30 各再跑一次 --update → 看<b>②区</b>「vs预警线」列盯破线（红底=盘中最低已触及D0最低，14:30后看收盘站不站得回来）。<br>
+<b>第二天盘中</b>：中午、14:30 各再跑一次 --update → 看<b>②区</b>「vs预警线」列盯收盘价（红底=现价跌破D0最低线，尾盘收不回来①项就不成立）。<br>
 <b>第二天14:30后</b>：核对四项定夺——①收盘站回D0最低价上方（上午碰破不要紧，尾盘还在线下=放弃）②收阳 ③站回MA5 ④量比≥1 → 通过则在 <b>13:00-14:55 买入，次日10:30前卖出</b>。<br>
 <b>▎信号档位胜率速查（10日内大涨≥6%）</b><br>
 <table style="margin:6px 0;">
@@ -565,7 +565,7 @@ __REVIEW__
 <b>▎涨停基因窗口（20日）与新鲜度</b>：入池门槛 = <b>20 个交易日内有过涨停</b>。回测验证（n=9478 确认事件）：距涨停 1~2 天 / 3~5 / 6~10 / 11~15 / 16~20 天确认的票，后续 10 日大涨率 45.6% / 44.9% / 47.0% / 47.3% / 44.1%——<b>基本无衰减，不存在"超过10天失效"</b>；新鲜度（≤5天）只影响①区「优先分」的排序（先盯谁），不影响确认档位本身。另一个口径勿混淆：大涨日<b>前置画像</b>中"10日内涨停加成"（48.6% vs 无涨停23.5%）说的是预测任意一天的普涨，与本体系"急跌→确认"的胜率是两回事。<br>
 <b>▎「核对日」与四项逐项打勾（②区）</b><br>
 每只票四个信号 <span style="color:#1e8449;font-weight:700;">●</span>到位 / <span style="color:#c0392b;font-weight:700;">✗</span>未到位 / <span style="color:#bdc3c7;">–</span>还没轮到，逐项标在②区表格里。「核对日」列显示当前核到第几天：D1 没凑齐的票会<b>自动滚动到最新交易日继续核</b>（近一年回测：27% 的票要等 D2~D5 才确认，且晚确认质量不打折——D1 43.6% / D2 47.3% / D5 48.7%）。四项全中的当天就是<b>确认日</b>，当天 13:00-14:55 买入、次日卖；超过 5 天还没凑齐（核到 D5 仍缺项），放弃。<br>
-<b>▎「D0最低价」vs「今日最低(现)」（②区两列并排）</b>：左列 = <b>D0预警线锚</b>（固定不变，整个 D1~D5 窗口都比它），右列 = <b>核对日当天最低价</b>（盘中每20秒实时刷新，带 <span class="nowtag">今</span> 标 = 正在用当日实时数据）；<b>右列低于左列 = 盘中破线</b>（红底「破线」），14:30 后看收盘能否站回来定①项成不成立——两列放一起就是为了不用来回翻①区找锚价。
+<b>▎「D0最低价」vs「今日收盘(现)」（②区两列并排）</b>：左列 = <b>D0预警线锚</b>（固定不变，整个 D1~D5 窗口都比它），右列 = <b>核对日收盘价</b>（盘中=实时最新价，即"若现在收盘"的收盘价，每20秒刷新，带 <span class="nowtag">今</span> 标 = 正在用当日实时数据；收盘后=正式收盘价）；<b>右列低于左列 = 收盘价破线</b>（红底「破线」）——①项口径就是收盘&gt;D0最低价，这列直接实时盯①项成不成立，盘中碰线不破收盘不算失败——两列放一起就是为了不用来回翻①区找锚价。
 <b>▎「D0性质」—— 今天这根急跌是洗盘还是出货？（全历史 n=26608 回测）</b><br>
 <span class="chip up">● 偏洗盘</span> = <b>放量急跌(量比≥1.2) + 涨停1~2天内</b>：下跌有承接、分歧换手充分，次日反抽概率最高，<b>确认率 15.5%</b>（基线7.3%的2倍+），优先盯。<br>
 <span class="chip dn">▼ 偏出货</span> = <b>缩量阴跌(量比&lt;0.7)</b>：没有资金接、阴跌磨人，次日确认率仅 <b>3.0%</b>；其中缩量+涨停1~2天的最坑，确认后次日卖出均值 <b>-2.29%</b>（全表最差），直接跳过、别浪费精力。<br>
@@ -753,7 +753,7 @@ function lvApply(){
     if(!s)return;
     var p=s.split('~');
     if(p.length<35)return;
-    var price=parseFloat(p[3]),pct=parseFloat(p[32]),low=parseFloat(p[34]);
+    var price=parseFloat(p[3]),pct=parseFloat(p[32]);
     if(!isFinite(price)||price<=0)return;
     okSet[code]=1;
     var col = pct>0.001?'#c0392b':(pct<-0.001?'#1e8449':'#566573');
@@ -766,11 +766,11 @@ function lvApply(){
       if(!d1d&&isFinite(d0)&&d0>0&&price<d0){html+=' <span class="brk">破线</span>';b1++;}
       lq.innerHTML=html;lq.style.color='';
     }
-    if(isFinite(d0)&&d0>0&&isFinite(low)&&low>0&&(!d1d||d1d===tdy)){
-      var cl=tr.querySelector('.lv-low');if(cl)cl.innerHTML=low.toFixed(2)+' <span class="nowtag">今</span>';
+    if(isFinite(d0)&&d0>0&&isFinite(price)&&price>0&&(!d1d||d1d===tdy)){
+      var cl=tr.querySelector('.lv-close');if(cl)cl.innerHTML=price.toFixed(2)+' <span class="nowtag">今</span>';
       var vs=tr.querySelector('.lv-vs');
       if(vs){
-        var g=(low-d0)/d0*100;
+        var g=(price-d0)/d0*100;
         if(g<=0.001){vs.style.background='#fdedec';vs.innerHTML='<b style="color:#c0392b;">破线</b>';b2++;tr.classList.add('brkrow');}
         else{vs.style.background='';vs.innerHTML='<b style="color:'+(g<1?'#d35400':'#1e8449')+';">+'+g.toFixed(1)+'%</b>';tr.classList.remove('brkrow');}
       }
